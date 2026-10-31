@@ -247,6 +247,37 @@ class TestAdvancedEvents(unittest.TestCase):
         self.assertEqual(shape["centroids"]["B"], (11.0, 6.0))
 
 
+class TestV16(unittest.TestCase):
+    def test_team_names(self):
+        from fastapi.testclient import TestClient
+        from matchanalyzer import web as web_mod
+        import json, tempfile
+        from pathlib import Path
+        tmp = Path(tempfile.mkdtemp())
+        d = tmp / "teamtest"
+        d.mkdir()
+        (d / "summary.json").write_text(json.dumps({
+            "players": {"5": {"team": "A", "touches": 10}}}))
+        orig = web_mod.UPLOAD_DIR
+        web_mod.UPLOAD_DIR = tmp
+        web_mod.JOBS["teamtest"] = {"status": "done"}
+        try:
+            client = TestClient(web_mod.app)
+            r = client.post("/api/jobs/teamtest/players",
+                            json={"labels": {},
+                                  "team_names": {"A": "Urlabari FC",
+                                                 "B": "Damak Utd"}})
+            self.assertEqual(r.json(), {"ok": True})
+            r = client.get("/api/jobs/teamtest/players")
+            self.assertEqual(r.json()["team_names"]["A"], "Urlabari FC")
+            # meta.json persisted
+            meta = json.loads((d / "meta.json").read_text())
+            self.assertEqual(meta["team_names"]["B"], "Damak Utd")
+        finally:
+            web_mod.UPLOAD_DIR = orig
+            del web_mod.JOBS["teamtest"]
+
+
 class TestV15(unittest.TestCase):
     def test_library_endpoints(self):
         from fastapi.testclient import TestClient

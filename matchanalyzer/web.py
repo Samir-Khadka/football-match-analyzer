@@ -294,13 +294,19 @@ def get_report(job_id: str):
     if not job or job["status"] != "done":
         return HTMLResponse("<p>Report not ready yet.</p>", status_code=404)
     html = Path(job["report_path"]).read_text(encoding="utf-8")
-    # inject player labels (#id -> name)
+    # inject player labels (#id -> name) and team names
     labels_path = UPLOAD_DIR / job_id / "labels.json"
     if labels_path.exists():
         labels = json_mod.loads(labels_path.read_text())
         for tid, name in labels.items():
             html = html.replace(f"#{tid}<", f"{name}<")
             html = html.replace(f"#{tid} ", f"{name} ")
+    meta_path = UPLOAD_DIR / job_id / "meta.json"
+    if meta_path.exists():
+        names = json_mod.loads(meta_path.read_text()).get("team_names", {})
+        for t, nm in names.items():
+            if nm:
+                html = html.replace(f"Team {t}", nm)
     return HTMLResponse(html)
 
 
@@ -399,9 +405,20 @@ def api_library():
         dt = datetime.datetime.fromtimestamp(
             job_dir.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
         poss = summ.get("possession_pct", {})
+        # team names from meta.json
+        title = f"Match {job_dir.name[:8]}"
+        meta_path = job_dir / "meta.json"
+        if meta_path.exists():
+            try:
+                names = json_mod.loads(meta_path.read_text()).get(
+                    "team_names", {})
+                if names.get("A") and names.get("B"):
+                    title = f"{names['A']} vs {names['B']}"
+            except Exception:
+                pass
         matches.append({
             "job_id": job_dir.name,
-            "title": f"Match {job_dir.name[:8]}",
+            "title": title,
             "date": dt,
             "n_shots": summ.get("n_shots", 0),
             "n_goals": summ.get("n_goals", 0),
@@ -444,13 +461,15 @@ def get_players(job_id: str):
         job = JOBS.get(job_id)
     if not job:
         return JSONResponse({"status": "not_found"}, status_code=404)
-    # players from the summary
     import json as json_mod
     summary_path = UPLOAD_DIR / job_id / "summary.json"
     labels_path = UPLOAD_DIR / job_id / "labels.json"
-    labels = {}
+    meta_path = UPLOAD_DIR / job_id / "meta.json"
+    labels, meta = {}, {}
     if labels_path.exists():
         labels = json_mod.loads(labels_path.read_text())
+    if meta_path.exists():
+        meta = json_mod.loads(meta_path.read_text())
     players = []
     if summary_path.exists():
         summ = json_mod.loads(summary_path.read_text())
@@ -460,18 +479,24 @@ def get_players(job_id: str):
                 "label": labels.get(str(tid), ""),
             })
     players.sort(key=lambda p: p["touches"], reverse=True)
-    return {"players": players}
+    return {"players": players,
+            "team_names": meta.get("team_names", {})}
 
 
 @app.post("/api/jobs/{job_id}/players")
 def set_players(job_id: str, payload: dict):
     import json as json_mod
     labels = {str(k): v for k, v in (payload.get("labels") or {}).items()}
-    labels_path = UPLOAD_DIR / job_id / "labels.json"
-    labels_path.write_text(json_mod.dumps(labels))
+    team_names = {k: v for k, v in (payload.get("team_names") or {}).items()
+                  if v}
+    (UPLOAD_DIR / job_id / "labels.json").write_text(
+        json_mod.dumps(labels))
+    (UPLOAD_DIR / job_id / "meta.json").write_text(
+        json_mod.dumps({"team_names": team_names}))
     with JOB_LOCK:
         if job_id in JOBS:
             JOBS[job_id]["labels"] = labels
+            JOBS[job_id]["team_names"] = team_names
     return {"ok": True}
 
 
@@ -489,8 +514,10 @@ padding:.7rem 1.4rem;font-size:1rem;cursor:pointer;margin-top:1rem}
 .note{color:#6b6b6b;font-size:.85rem}
 </style></head><body>
 <h1>Label your players</h1>
-<p class="note">Match each track ID to a real name/number (e.g. "Ram #7").
-Reports and the annotated video will use these.</p>
+<p class="note">Name the teams and match each track ID to a real name/number
+(e.g. "Ram #7"). Reports and the library will use these.</p>
+<p>Team A: <input id="teamA" placeholder="e.g. Urlabari FC" style="width:200px">
+Team B: <input id="teamB" placeholder="e.g. Damak United" style="width:200px"></p>
 <table><tr><th>Track</th><th>Team</th><th>Touches</th><th>Name / number</th></tr>
 <tbody id="rows"></tbody></table>
 <button onclick="save()">Save labels</button>
@@ -503,6 +530,8 @@ async function load(){
     `<tr><td>#${p.id}</td><td>${p.team}</td><td>${p.touches}</td>`+
     `<td><input data-id="${p.id}" value="${p.label||''}" `+
     `placeholder="e.g. Ram #7"></td></tr>`).join('');
+  document.getElementById('teamA').value=j.team_names?.A||'';
+  document.getElementById('teamB').value=j.team_names?.B||'';
 }
 async function save(){
   const labels={};
@@ -510,7 +539,9 @@ async function save(){
     if(i.value.trim())labels[i.dataset.id]=i.value.trim();});
   await fetch('/api/jobs/'+jobId+'/players',{method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({labels})});
+    body:JSON.stringify({labels,
+      team_names:{A:document.getElementById('teamA').value.trim(),
+                  B:document.getElementById('teamB').value.trim()}})});
   document.getElementById('msg').textContent='Saved! Reports now use these names.';
 }
 load();
