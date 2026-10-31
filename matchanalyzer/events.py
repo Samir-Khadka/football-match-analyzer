@@ -297,8 +297,86 @@ def detect_throw_ins(frames_data, teams):
     return throw_ins
 
 
-def _shot_team(shot, teams, frames_data):
-    """Team that took the shot: possession at shot time, else nearest player."""
+def attack_directions(shots, teams, frames_data, heatmaps):
+    """Which goal each team attacks: +1 (attacks +x) or -1 (attacks -x).
+    Primary: shot directions by team. Fallback: heatmap centroids (the team
+    positioned higher up attacks +x)."""
+    dirs = {}
+    shot_dir = {"A": [], "B": []}
+    for s in shots:
+        t = _shot_team(s, teams, frames_data)
+        if t and "goal" in s:
+            shot_dir[t].append(1 if s["goal"] == "+x" else -1)
+    for t in ("A", "B"):
+        if shot_dir[t]:
+            dirs[t] = 1 if sum(shot_dir[t]) >= 0 else -1
+    if len(dirs) < 2:
+        mx = {}
+        for t in ("A", "B"):
+            pts = heatmaps.get(t, [])
+            mx[t] = sum(p[0] for p in pts) / len(pts) if pts else 0.0
+        if "A" not in dirs and "B" not in dirs:
+            dirs = {"A": 1, "B": -1} if mx["A"] >= mx["B"] else \
+                {"A": -1, "B": 1}
+        elif "A" not in dirs:
+            dirs["A"] = -dirs["B"]
+        else:
+            dirs["B"] = -dirs["A"]
+    return dirs
+
+
+def detect_corners_goal_kicks(frames_data, teams, shots, heatmaps):
+    """Byline exits (wide of the goal): corner if the defending team touched
+    last, goal kick if the attacking team did. Returns
+    [{"t", "x", "y", "type", "team"}] where team gets the restart."""
+    dirs = attack_directions(shots, teams, frames_data, heatmaps)
+    events = []
+    last_team = None
+    was_out = False
+    for f in frames_data:
+        out = _ball_out(f["ball"])
+        if out and not was_out and f["ball"] is not None:
+            x, y = f["ball"]
+            if abs(x) > PITCH_LENGTH / 2 and \
+                    abs(y) > GOAL_HALF_WIDTH_M:
+                goal_side = 1 if x > 0 else -1
+                attacking = [t for t, d in dirs.items() if d == goal_side]
+                if attacking and last_team is not None:
+                    att = attacking[0]
+                    other = "B" if att == "A" else "A"
+                    if last_team == att:
+                        events.append({"t": f["t"], "x": round(x, 1),
+                                       "y": round(y, 1), "type": "goal_kick",
+                                       "team": other})
+                    else:
+                        events.append({"t": f["t"], "x": round(x, 1),
+                                       "y": round(y, 1), "type": "corner",
+                                       "team": att})
+        if out:
+            last_team = None
+        else:
+            pid = possession_per_frame(f["ball"], f["players"])
+            if pid is not None and pid in teams:
+                last_team = teams[pid]
+        was_out = out
+    return events
+
+
+def _shot_team(shot, teams, frames_data, window_s: float = 1.0):
+    """Team that took the shot: last possession within window_s before the
+    shot (the ball has usually left the foot at the exact shot frame)."""
+    best_pid, best_t = None, -1.0
+    for f in frames_data:
+        if f["t"] > shot["t"]:
+            break
+        if f["t"] < shot["t"] - window_s:
+            continue
+        pid = possession_per_frame(f["ball"], f["players"])
+        if pid is not None and pid in teams and f["t"] > best_t:
+            best_pid, best_t = pid, f["t"]
+    if best_pid is not None:
+        return teams[best_pid]
+    # fallback: nearest player at shot time
     best = None
     for f in frames_data:
         if f["t"] <= shot["t"]:
@@ -307,9 +385,6 @@ def _shot_team(shot, teams, frames_data):
             break
     if best is None or best["ball"] is None:
         return None
-    pid = possession_per_frame(best["ball"], best["players"])
-    if pid is not None and pid in teams:
-        return teams[pid]
     bx, by = best["ball"]
     nearest, nd = None, 1e9
     for pid, (px, py) in best["players"].items():
@@ -354,6 +429,7 @@ def summarize(frames_data, teams, fps):
     out_of_play = detect_out_of_play(ball_traj)
     goals = detect_goals(ball_traj)
     throw_ins = detect_throw_ins(frames_data, teams)
+    corners_gk = detect_corners_goal_kicks(frames_data, teams, shots, heat)
     sequences = possession_sequences(frames_data, teams)
     seq_stats = {}
     for team in ("A", "B"):
@@ -380,6 +456,7 @@ def summarize(frames_data, teams, fps):
         "n_tackles": len(tackles),
         "out_of_play": out_of_play,
         "throw_ins": throw_ins,
+        "corners_goal_kicks": corners_gk,
         "goals": goals,
         "n_goals": len(goals),
         "sequences": seq_stats,

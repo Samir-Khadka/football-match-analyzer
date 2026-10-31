@@ -247,6 +247,61 @@ class TestAdvancedEvents(unittest.TestCase):
         self.assertEqual(shape["centroids"]["B"], (11.0, 6.0))
 
 
+class TestV05(unittest.TestCase):
+    def test_attack_directions_from_heatmaps(self):
+        # no shots: team positioned higher up attacks +x
+        dirs = events.attack_directions(
+            [], {1: "A"}, [], {"A": [(20, 0)], "B": [(-20, 0)]})
+        self.assertEqual(dirs, {"A": 1, "B": -1})
+
+    def test_attack_directions_from_shots(self):
+        teams = {1: "A", 2: "B"}
+        frames = [
+            {"t": 0.5, "ball": (30, 0), "players": {1: (30.2, 0), 2: (-30, 0)}},
+            {"t": 1.5, "ball": (-30, 0), "players": {1: (30, 0), 2: (-30.2, 0)}},
+        ]
+        shots = [{"t": 1.0, "x": 30, "y": 0, "goal": "+x"},
+                 {"t": 2.0, "x": -30, "y": 0, "goal": "-x"}]
+        dirs = events.attack_directions(shots, teams, frames,
+                                        {"A": [(0, 0)], "B": [(0, 0)]})
+        self.assertEqual(dirs, {"A": 1, "B": -1})
+
+    def test_corner_when_defender_touches_last(self):
+        teams = {1: "A", 2: "B"}
+        heatmaps = {"A": [(20, 0)], "B": [(-20, 0)]}  # A attacks +x
+        frames = [
+            {"t": 0.0, "ball": (40, 5), "players": {1: (30, 0), 2: (40.2, 5)}},
+            {"t": 0.5, "ball": (53, 10), "players": {1: (30, 0), 2: (40.2, 5)}},
+        ]
+        ev = events.detect_corners_goal_kicks(frames, teams, [], heatmaps)
+        self.assertEqual(len(ev), 1)
+        self.assertEqual(ev[0]["type"], "corner")
+        self.assertEqual(ev[0]["team"], "A")
+
+    def test_goal_kick_when_attacker_touches_last(self):
+        teams = {1: "A", 2: "B"}
+        heatmaps = {"A": [(20, 0)], "B": [(-20, 0)]}  # A attacks +x
+        frames = [
+            {"t": 0.0, "ball": (40, 5), "players": {1: (40.2, 5), 2: (30, 0)}},
+            {"t": 0.5, "ball": (53, 10), "players": {1: (40.2, 5), 2: (30, 0)}},
+        ]
+        ev = events.detect_corners_goal_kicks(frames, teams, [], heatmaps)
+        self.assertEqual(len(ev), 1)
+        self.assertEqual(ev[0]["type"], "goal_kick")
+        self.assertEqual(ev[0]["team"], "B")
+
+    def test_goal_is_not_a_corner(self):
+        teams = {1: "A", 2: "B"}
+        heatmaps = {"A": [(20, 0)], "B": [(-20, 0)]}
+        frames = [
+            {"t": 0.0, "ball": (40, 0), "players": {1: (40.2, 0)}},
+            {"t": 0.5, "ball": (53, 0.5), "players": {1: (40.2, 0)}},
+        ]
+        # between the posts (|y| <= 3.66) -> goal, not corner/goal-kick
+        self.assertEqual(
+            events.detect_corners_goal_kicks(frames, teams, [], heatmaps), [])
+
+
 class TestV04(unittest.TestCase):
     def test_xg_sane(self):
         # penalty spot, central >> 30 m, wide; always a probability

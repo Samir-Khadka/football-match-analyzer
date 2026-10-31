@@ -132,6 +132,9 @@ def build_report(summary, out_path, title="Match Report", clips=None):
     txg = summary.get("total_xg", {"A": 0, "B": 0})
     seq = summary.get("sequences", {})
     throw_ins = summary.get("throw_ins", [])
+    cgk = summary.get("corners_goal_kicks", [])
+    n_corners = sum(1 for e in cgk if e["type"] == "corner")
+    n_gk = sum(1 for e in cgk if e["type"] == "goal_kick")
     clip_html = ""
     if clips:
         items = "".join(
@@ -200,7 +203,8 @@ played further up the pitch.</p></div>
 <tr><td>Team B</td><td>{seq.get('B', {}).get('count', 0)}</td>
 <td>{seq.get('B', {}).get('longest_s', 0)}s</td>
 <td>{seq.get('B', {}).get('avg_s', 0)}s</td></tr></table>
-<p class="note">Throw-ins: {len(throw_ins)}.</p></div>
+<p class="note">Throw-ins: {len(throw_ins)} · Corners: {n_corners} ·
+Goal kicks: {n_gk}.</p></div>
 {clip_html}
 <p class="note">Coverage: ball tracked for {summary['ball_coverage']:.0%}
 of the match ({summary['n_frames']} frames analysed). Stats reflect what the
