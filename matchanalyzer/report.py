@@ -252,6 +252,8 @@ color:#6b6156}}.stat{{display:inline-block;margin:0 18px 6px 0}}
 <p class="note">Track IDs can split on occlusions — one real player may appear
 as several rows. Check the pass network map to merge.</p></div>
 <div class="card"><h2>⚔️ Tactical vulnerabilities</h2>
+<p>Formations — Team A: <b>{tprof['A'].get('formation', '–')}</b> ·
+Team B: <b>{tprof['B'].get('formation', '–')}</b></p>
 <table><tr><th>Severity</th><th>Team</th><th>Finding → Exploit</th></tr>{trows}</table>
 <p class="note">Heuristic analysis from the tracked data — not a fitted model.
 Verify against video before basing a game plan on it.</p></div>

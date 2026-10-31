@@ -247,6 +247,44 @@ class TestAdvancedEvents(unittest.TestCase):
         self.assertEqual(shape["centroids"]["B"], (11.0, 6.0))
 
 
+class TestV12(unittest.TestCase):
+    def test_formation_442(self):
+        from matchanalyzer import tactics as tm
+        # 4-4-2: GK + 4 defenders + 4 mids + 2 attackers (attacking +x)
+        pos = [(-48, 0),  # GK
+               (-30, -15), (-30, -5), (-30, 5), (-30, 15),  # defence
+               (-10, -15), (-10, -5), (-10, 5), (-10, 15),  # midfield
+               (15, -7), (15, 7)]  # attack
+        self.assertEqual(tm.detect_formation(pos, 1), "4-4-2")
+
+    def test_formation_433(self):
+        from matchanalyzer import tactics as tm
+        pos = [(-48, 0),
+               (-30, -15), (-30, -5), (-30, 5), (-30, 15),
+               (-8, -10), (-8, 0), (-8, 10),
+               (18, -12), (18, 0), (18, 12)]
+        self.assertEqual(tm.detect_formation(pos, 1), "4-3-3")
+
+    def test_formation_too_few(self):
+        from matchanalyzer import tactics as tm
+        self.assertIsNone(tm.detect_formation([(-48, 0), (-30, 0)], 1))
+        self.assertIsNone(tm.detect_formation([], 1))
+
+    def test_formation_in_profile(self):
+        from matchanalyzer import tactics as tm
+        summary = {
+            "shots": [], "progressive_passes": [],
+            "shape": {"positions": {
+                "A": [(-48, 0), (-30, -10), (-30, 10),
+                      (-10, -10), (-10, 10), (15, 0)],
+                "B": []}, "centroids": {}},
+            "players": {}, "passes": {"completed": {}, "turnovers": {}},
+        }
+        prof = tm.tactical_profile(summary)
+        # 5 outfield + GK: lines at -30 (2), -10 (2), 15 (1) -> 2-2-1
+        self.assertEqual(prof["A"]["formation"], "2-2-1")
+
+
 class TestV11(unittest.TestCase):
     def test_interception_flagged(self):
         teams = {1: "A", 2: "B"}

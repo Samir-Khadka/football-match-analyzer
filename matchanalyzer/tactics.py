@@ -16,6 +16,32 @@ def _flank(y):
     return "center"
 
 
+def detect_formation(positions, attack_dir, gap_m: float = 7.0):
+    """Classify formation (e.g. '4-4-2') from average outfield positions.
+
+    Removes the goalkeeper (deepest), sorts the rest from defensive to
+    attacking, and splits into lines wherever the x-gap exceeds gap_m.
+    Returns None when there are too few players to call it.
+    """
+    if len(positions) < 5:
+        return None
+    gk = min(positions, key=lambda xy: xy[0] * attack_dir)
+    outfield = [p for p in positions if p != gk]
+    if len(outfield) < 4:
+        return None
+    ordered = sorted(outfield, key=lambda xy: xy[0] * attack_dir)
+    xs = [x * attack_dir for x, _ in ordered]
+    lines, current = [], [ordered[0]]
+    for i in range(1, len(ordered)):
+        if xs[i] - xs[i - 1] > gap_m:
+            lines.append(current)
+            current = [ordered[i]]
+        else:
+            current.append(ordered[i])
+    lines.append(current)
+    return "-".join(str(len(line)) for line in lines)
+
+
 def tactical_profile(summary):
     """Build a tactical profile per team from the summary."""
     profile = {}
@@ -75,8 +101,17 @@ def tactical_profile(summary):
         avg_xg = (sum(s.get("xg", 0) for s in tshots) / len(tshots)
                   if tshots else 0.0)
 
+        # formation from stable tracks only (frames >= 30) to avoid
+        # fragmentation noise; falls back to shape positions
+        net_nodes = [n for n in summary.get("pass_network", {}).get("nodes", [])
+                     if n["team"] == t and n.get("frames", 0) >= 30]
+        if len(net_nodes) >= 5:
+            fpos = [(n["x"], n["y"]) for n in net_nodes]
+        else:
+            fpos = summary.get("shape", {}).get("positions", {}).get(t, [])
         profile[t] = {
             "attack_dir": d,
+            "formation": detect_formation(fpos, d),
             "zones": {k: round(v / total_z, 2) for k, v in zones.items()},
             "dominant_flank": max(zones, key=zones.get),
             "flank_share": round(max(zones.values()) / total_z, 2),
