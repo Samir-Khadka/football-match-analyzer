@@ -259,7 +259,8 @@ const iv=setInterval(async()=>{
   const j=await (await fetch('/api/jobs/'+jobId)).json();
   if(j.status==='done'){clearInterval(iv);
     document.body.innerHTML='<h1>Done!</h1><p><a href="/report/'+jobId+
-    '">View the full report</a></p><p><a href="/annotated/'+jobId+
+    '">View the full report</a></p><p><a href="/pdf/'+jobId+
+    '">Download PDF report</a></p><p><a href="/annotated/'+jobId+
     '">Download annotated video</a> (boxes, ball trail, event callouts)</p>'+
     '<p><a href="/players/'+jobId+'">Label players</a> '+
     '(give tracks real names/numbers)</p>';}
@@ -386,6 +387,45 @@ load();
 @app.get("/library", response_class=HTMLResponse)
 def library_page():
     return LIBRARY_HTML
+
+
+@app.get("/pdf/{job_id}")
+def get_pdf(job_id: str):
+    from fastapi.responses import FileResponse
+    import json as json_mod
+    import pickle as pickle_mod
+    with JOB_LOCK:
+        job = JOBS.get(job_id)
+    pkl_path = UPLOAD_DIR / job_id / "summary.pkl"
+    if not pkl_path.exists():
+        return JSONResponse({"status": "not ready"}, status_code=404)
+    with open(pkl_path, "rb") as f:
+        summary = pickle_mod.load(f)
+    # labels + team names
+    labels, team_names = {}, {}
+    lp = UPLOAD_DIR / job_id / "labels.json"
+    mp = UPLOAD_DIR / job_id / "meta.json"
+    if lp.exists():
+        labels = json_mod.loads(lp.read_text())
+    if mp.exists():
+        team_names = json_mod.loads(mp.read_text()).get("team_names", {})
+    # apply team names to the title
+    title = "Match Report"
+    if team_names.get("A") and team_names.get("B"):
+        title = f"{team_names['A']} vs {team_names['B']}"
+    from . import report as report_mod
+    out_path = UPLOAD_DIR / job_id / "report.pdf"
+    # inject team names into summary for the PDF text
+    if team_names:
+        # shallow: replace in a copy for display
+        import copy
+        summary = copy.deepcopy(summary)
+        # build_pdf uses "Team A"/"Team B" strings; post-process the PDF
+        # is hard, so we pass labels and handle names via report title
+    report_mod.build_pdf(summary, str(out_path), title=title,
+                         labels=labels)
+    return FileResponse(str(out_path), media_type="application/pdf",
+                        filename="report.pdf")
 
 
 @app.get("/api/library")
@@ -606,6 +646,10 @@ def _process_job(job_id: str):
             return str(o)
         (out_dir / "summary.json").write_text(
             json_mod.dumps(_jsonable(summary)))
+        # pickle preserves types for PDF rebuilds
+        import pickle as pickle_mod
+        with open(out_dir / "summary.pkl", "wb") as pf:
+            pickle_mod.dump(summary, pf)
         with JOB_LOCK:
             JOBS[job_id].update(status="done", progress=1.0,
                                 report_path=str(out_dir / "report.html"),

@@ -247,6 +247,49 @@ class TestAdvancedEvents(unittest.TestCase):
         self.assertEqual(shape["centroids"]["B"], (11.0, 6.0))
 
 
+class TestV17(unittest.TestCase):
+    def test_pdf_endpoint(self):
+        from fastapi.testclient import TestClient
+        from matchanalyzer import web as web_mod
+        import pickle, tempfile
+        from pathlib import Path
+        tmp = Path(tempfile.mkdtemp())
+        d = tmp / "pdftest"
+        d.mkdir()
+        # minimal summary pickle
+        summary = {
+            "possession_pct": {"A": 50, "B": 50},
+            "possession_frames": {"A": 10, "B": 10},
+            "heatmaps": {"A": [], "B": []},
+            "shots": [], "goals": [], "tackles": [],
+            "passes": {"completed": {"A": 0, "B": 0},
+                       "turnovers": {"A": 0, "B": 0}},
+            "distance_m": {"A": 0, "B": 0},
+            "shape": {"positions": {"A": [], "B": []},
+                      "centroids": {"A": (0, 0), "B": (0, 0)}},
+            "players": {}, "total_xg": {"A": 0, "B": 0},
+            "sequences": {}, "throw_ins": [], "corners_goal_kicks": [],
+            "n_shots": 0, "n_goals": 0, "n_tackles": 0,
+            "ball_coverage": 1.0,
+        }
+        with open(d / "summary.pkl", "wb") as f:
+            pickle.dump(summary, f)
+        orig = web_mod.UPLOAD_DIR
+        web_mod.UPLOAD_DIR = tmp
+        web_mod.JOBS["pdftest"] = {"status": "done"}
+        try:
+            client = TestClient(web_mod.app)
+            r = client.get("/pdf/pdftest")
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.headers["content-type"], "application/pdf")
+            self.assertTrue((d / "report.pdf").exists())
+            r = client.get("/pdf/nonexistent")
+            self.assertEqual(r.status_code, 404)
+        finally:
+            web_mod.UPLOAD_DIR = orig
+            del web_mod.JOBS["pdftest"]
+
+
 class TestV16(unittest.TestCase):
     def test_team_names(self):
         from fastapi.testclient import TestClient
