@@ -247,6 +247,49 @@ class TestAdvancedEvents(unittest.TestCase):
         self.assertEqual(shape["centroids"]["B"], (11.0, 6.0))
 
 
+class TestV07(unittest.TestCase):
+    def test_carry_distance(self):
+        teams = {1: "A"}
+        frames = [
+            {"t": 0.0, "ball": (0, 0), "players": {1: (0.0, 0.0)}},
+            {"t": 1.0, "ball": (3, 4), "players": {1: (3.0, 4.0)}},
+            {"t": 2.0, "ball": (6, 8), "players": {1: (6.0, 8.0)}},
+        ]
+        # 5 m per frame x 2 = 10 m carried
+        self.assertAlmostEqual(
+            events.carry_distance(frames, teams)["A"], 10.0, places=1)
+
+    def test_carry_resets_on_turnover(self):
+        teams = {1: "A", 2: "B"}
+        frames = [
+            {"t": 0.0, "ball": (0, 0), "players": {1: (0.0, 0.0), 2: (50, 0)}},
+            {"t": 1.0, "ball": (3, 4), "players": {1: (3.0, 4.0), 2: (50, 0)}},
+            {"t": 2.0, "ball": (50, 0), "players": {1: (3.0, 4.0), 2: (50.2, 0)}},
+            {"t": 3.0, "ball": (53, 0), "players": {1: (3.0, 4.0), 2: (53.2, 0)}},
+        ]
+        c = events.carry_distance(frames, teams)
+        self.assertAlmostEqual(c["A"], 5.0, places=1)
+        self.assertAlmostEqual(c["B"], 3.0, places=1)
+
+    def test_progressive_pass(self):
+        # A attacks +x
+        dirs = {"A": 1, "B": -1}
+        prog = events.progressive_passes(
+            [{"t": 1.0, "from": 1, "to": 2, "team": "A", "dist_m": 15.0,
+              "from_xy": (0.0, 0.0), "to_xy": (15.0, 0.0)}], dirs)
+        self.assertEqual(len(prog), 1)
+        # sideways pass is not progressive
+        flat = events.progressive_passes(
+            [{"t": 1.0, "from": 1, "to": 2, "team": "A", "dist_m": 15.0,
+              "from_xy": (0.0, 0.0), "to_xy": (0.0, 15.0)}], dirs)
+        self.assertEqual(len(flat), 0)
+        # entry into final third counts even if short
+        entry = events.progressive_passes(
+            [{"t": 1.0, "from": 1, "to": 2, "team": "A", "dist_m": 5.0,
+              "from_xy": (15.0, 0.0), "to_xy": (20.0, 0.0)}], dirs)
+        self.assertEqual(len(entry), 1)
+
+
 class TestV06(unittest.TestCase):
     def test_pass_network(self):
         teams = {1: "A", 2: "A", 3: "B"}

@@ -189,6 +189,8 @@ def build_report(summary, out_path, title="Match Report", clips=None):
     cgk = summary.get("corners_goal_kicks", [])
     n_corners = sum(1 for e in cgk if e["type"] == "corner")
     n_gk = sum(1 for e in cgk if e["type"] == "goal_kick")
+    n_prog = summary.get("n_progressive", {"A": 0, "B": 0})
+    carries = summary.get("carry_m", {"A": 0, "B": 0})
     clip_html = ""
     if clips:
         items = "".join(
@@ -235,7 +237,9 @@ based on {summary['possession_frames']} tracked frames.</p></div>
 <p class="note">Passes — Team A: {passes['completed']['A']} completed,
 {passes['turnovers']['A']} turnovers · Team B: {passes['completed']['B']}
 completed, {passes['turnovers']['B']} turnovers.<br>
-Distance — Team A {dist['A']:.0f} m · Team B {dist['B']:.0f} m.</p></div>
+Distance — Team A {dist['A']:.0f} m · Team B {dist['B']:.0f} m.<br>
+Carries (with ball) — A {carries['A']:.0f} m · B {carries['B']:.0f} m.<br>
+Progressive passes — A {n_prog['A']} · B {n_prog['B']}.</p></div>
 <div class="card"><h2>Team shape</h2><img src="data:image/png;base64,{sh}">
 <p class="note">Average positions across the match. Higher centroid = team
 played further up the pitch.</p></div>
@@ -301,6 +305,10 @@ def build_pdf(summary, out_path, title="Match Report"):
             f"Turnovers — A {passes['turnovers']['A']}   "
             f"B {passes['turnovers']['B']}",
             f"Distance — A {dist['A']:.0f} m   B {dist['B']:.0f} m",
+            f"Carries — A {summary.get('carry_m', {}).get('A', 0):.0f} m   "
+            f"B {summary.get('carry_m', {}).get('B', 0):.0f} m",
+            f"Progressive passes — A {summary.get('n_progressive', {}).get('A', 0)}   "
+            f"B {summary.get('n_progressive', {}).get('B', 0)}",
             f"Possession sequences — A {seq.get('A', {}).get('count', 0)} "
             f"(longest {seq.get('A', {}).get('longest_s', 0)}s)   "
             f"B {seq.get('B', {}).get('count', 0)} "

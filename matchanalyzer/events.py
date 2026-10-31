@@ -428,6 +428,45 @@ def pass_network(frames_data, teams, pass_list):
     return {"nodes": nodes, "edges": edges}
 
 
+def carry_distance(frames_data, teams):
+    """Metres covered WITH the ball (possessor's movement), per team.
+    Only counts frames where the same player keeps possession."""
+    carries = {"A": 0.0, "B": 0.0}
+    prev_pid, prev_pos = None, None
+    for f in frames_data:
+        pid = possession_per_frame(f["ball"], f["players"])
+        if pid is not None and pid in teams and pid == prev_pid \
+                and pid in f["players"] and prev_pos is not None:
+            px, py = f["players"][pid]
+            carries[teams[pid]] += math.hypot(px - prev_pos[0],
+                                              py - prev_pos[1])
+        if pid is not None and pid in f["players"]:
+            prev_pid, prev_pos = pid, f["players"][pid]
+        else:
+            prev_pid, prev_pos = None, None
+    return {t: round(v, 1) for t, v in carries.items()}
+
+
+def progressive_passes(pass_list, attack_dirs):
+    """Passes that move the ball 10 m+ toward the opponent goal, or carry it
+    into the final third. Returns the filtered list."""
+    out = []
+    for p in pass_list:
+        d = attack_dirs.get(p["team"])
+        if not d or "from_xy" not in p:
+            continue
+        (x0, y0), (x1, y1) = p["from_xy"], p["to_xy"]
+        toward = (x1 - x0) * d
+        final_third = PITCH_LENGTH / 2 - PITCH_LENGTH / 3
+        if d > 0:
+            enters = x1 > final_third >= x0
+        else:
+            enters = x1 < -final_third <= x0
+        if toward >= 10.0 or enters:
+            out.append(p)
+    return out
+
+
 def summarize(frames_data, teams, fps):
     """frames_data: list of {"t", "ball": (x,y)|None, "players": {id: (x,y)}}.
 
@@ -467,6 +506,9 @@ def summarize(frames_data, teams, fps):
     corners_gk = detect_corners_goal_kicks(frames_data, teams, shots, heat)
     sequences = possession_sequences(frames_data, teams)
     network = pass_network(frames_data, teams, passes["list"])
+    attack_dirs = attack_directions(shots, teams, frames_data, heat)
+    prog = progressive_passes(passes["list"], attack_dirs)
+    carries = carry_distance(frames_data, teams)
     seq_stats = {}
     for team in ("A", "B"):
         tsegs = [q for q in sequences if q["team"] == team]
@@ -497,6 +539,10 @@ def summarize(frames_data, teams, fps):
         "n_goals": len(goals),
         "sequences": seq_stats,
         "pass_network": network,
+        "progressive_passes": prog,
+        "n_progressive": {t: sum(1 for p in prog if p["team"] == t)
+                          for t in ("A", "B")},
+        "carry_m": carries,
         "ball_coverage": ball_seen / len(frames_data) if frames_data else 0.0,
         "n_frames": len(frames_data),
     }
@@ -539,7 +585,11 @@ def detect_passes(frames_data, teams, max_gap_s: float = 3.0,
                         passes[team] += 1
                         pass_list.append({"t": f["t"], "from": lpid,
                                           "to": pid, "team": team,
-                                          "dist_m": round(dist, 1)})
+                                          "dist_m": round(dist, 1),
+                                          "from_xy": (round(lball[0], 1),
+                                                      round(lball[1], 1)),
+                                          "to_xy": (round(f["ball"][0], 1),
+                                                    round(f["ball"][1], 1))})
                     else:
                         turnovers[lteam] += 1
         last = (pid, team, f["t"], f["ball"])
