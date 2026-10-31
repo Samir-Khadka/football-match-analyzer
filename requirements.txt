@@ -5,3 +5,6 @@ supervision==0.25.1   # ByteTrack (removed in later versions)
 opencv-python-headless
 matplotlib
 numpy
+fastapi          # web UI (v0.8)
+uvicorn          # web UI server
+python-multipart # web UI file uploads

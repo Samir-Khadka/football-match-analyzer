@@ -17,13 +17,14 @@ from .track import Tracker
 class Pipeline:
     def __init__(self, detector, calibrator: PitchCalibrator, fps: float,
                  frame_stride: int = 1, max_frames: int | None = None,
-                 collect_colors: bool = True):
+                 collect_colors: bool = True, progress_cb=None):
         self.detector = detector
         self.calibrator = calibrator
         self.fps = fps
         self.stride = max(1, frame_stride)
         self.max_frames = max_frames
         self.collect_colors = collect_colors
+        self.progress_cb = progress_cb
         self.tracker = Tracker(fps=int(fps))
 
     def run(self, video_path, report_path="report.html", clips_dir=None):
@@ -32,6 +33,7 @@ class Pipeline:
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             raise FileNotFoundError(f"cannot open video: {video_path}")
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
 
         tracks_by_id: dict[int, dict] = {}
         colors: dict[int, list] = {}
@@ -64,6 +66,9 @@ class Pipeline:
             ball_px.append(ball)
             kept += 1
             frame_idx += 1
+            if self.progress_cb and kept % 30 == 0:
+                denom = total_frames or 900
+                self.progress_cb(min(0.95, kept / denom))
         cap.release()
 
         # team assignment from jersey colours — cluster only long-lived tracks

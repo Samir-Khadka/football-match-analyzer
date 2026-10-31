@@ -247,6 +247,20 @@ class TestAdvancedEvents(unittest.TestCase):
         self.assertEqual(shape["centroids"]["B"], (11.0, 6.0))
 
 
+class TestV08Web(unittest.TestCase):
+    def test_index_and_status(self):
+        from fastapi.testclient import TestClient
+        from matchanalyzer import web as web_mod
+        client = TestClient(web_mod.app)
+        r = client.get("/")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Football Match Analyzer", r.text)
+        r = client.get("/api/jobs/doesnotexist")
+        self.assertEqual(r.status_code, 404)
+        r = client.get("/report/doesnotexist")
+        self.assertEqual(r.status_code, 404)
+
+
 class TestV07(unittest.TestCase):
     def test_carry_distance(self):
         teams = {1: "A"}
