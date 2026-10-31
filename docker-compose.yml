@@ -1,0 +1,9 @@
+services:
+  analyzer:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./uploads:/app/uploads
+    # models/ is baked into the image; mount to override:
+    #   - ./models:/app/models
