@@ -221,6 +221,104 @@ def detect_goals(ball_traj):
     return goals
 
 
+def shot_xg(x, y):
+    """Expected goals for a shot from (x, y) — a transparent GEOMETRIC
+    HEURISTIC (distance bands x centrality), not a fitted model. Real xG
+    needs a trained model; this gives coaches a sensible 0-1 number."""
+    d = math.hypot(PITCH_LENGTH / 2 - abs(x), y)  # dist to nearest goal centre
+    centrality = max(0.2, 1.0 - abs(y) / 30.0)
+    if d <= 6:
+        base = 0.45
+    elif d <= 11:
+        base = 0.25
+    elif d <= 18:
+        base = 0.12
+    elif d <= 25:
+        base = 0.05
+    else:
+        base = 0.02
+    return round(min(0.9, base * centrality), 3)
+
+
+def possession_sequences(frames_data, teams):
+    """Unbroken possession spells per team. A spell survives brief None gaps
+    (ball in transit during a pass) — it ends only on out-of-play or the
+    other team gaining possession. Returns
+    [{"team", "t_start", "t_end", "duration_s"}]."""
+    seqs = []
+    cur_team, cur_start, last_t = None, None, None
+    for f in frames_data:
+        if _ball_out(f["ball"]):
+            if cur_team is not None:
+                seqs.append({"team": cur_team, "t_start": cur_start,
+                             "t_end": last_t,
+                             "duration_s": round(last_t - cur_start, 1)})
+                cur_team, cur_start = None, None
+            continue
+        pid = possession_per_frame(f["ball"], f["players"])
+        team = teams.get(pid) if pid else None
+        if team is not None and team != cur_team:
+            if cur_team is not None:
+                seqs.append({"team": cur_team, "t_start": cur_start,
+                             "t_end": last_t,
+                             "duration_s": round(last_t - cur_start, 1)})
+            cur_team, cur_start = team, f["t"]
+        # team None -> ball in transit, spell continues
+        last_t = f["t"]
+    if cur_team is not None:
+        seqs.append({"team": cur_team, "t_start": cur_start, "t_end": last_t,
+                     "duration_s": round(last_t - cur_start, 1)})
+    return seqs
+
+
+def detect_throw_ins(frames_data, teams):
+    """Sideline exits -> throw-in to the opponent of the last touch.
+    (Byline exits need attack-direction inference for corner/goal-kick;
+    v0.5.) Returns [{"t", "x", "y", "team"}]."""
+    throw_ins = []
+    last_team = None
+    was_out = False
+    for f in frames_data:
+        out = _ball_out(f["ball"])
+        if out and not was_out and f["ball"] is not None:
+            x, y = f["ball"]
+            if abs(y) > PITCH_WIDTH / 2 and abs(x) <= PITCH_LENGTH / 2:
+                if last_team is not None:
+                    awarded = "B" if last_team == "A" else "A"
+                    throw_ins.append({"t": f["t"], "x": round(x, 1),
+                                      "y": round(y, 1), "team": awarded})
+        if out:
+            last_team = None
+        else:
+            pid = possession_per_frame(f["ball"], f["players"])
+            if pid is not None and pid in teams:
+                last_team = teams[pid]
+        was_out = out
+    return throw_ins
+
+
+def _shot_team(shot, teams, frames_data):
+    """Team that took the shot: possession at shot time, else nearest player."""
+    best = None
+    for f in frames_data:
+        if f["t"] <= shot["t"]:
+            best = f
+        else:
+            break
+    if best is None or best["ball"] is None:
+        return None
+    pid = possession_per_frame(best["ball"], best["players"])
+    if pid is not None and pid in teams:
+        return teams[pid]
+    bx, by = best["ball"]
+    nearest, nd = None, 1e9
+    for pid, (px, py) in best["players"].items():
+        d = math.hypot(bx - px, by - py)
+        if d < nd:
+            nearest, nd = pid, d
+    return teams.get(nearest) if nearest else None
+
+
 def summarize(frames_data, teams, fps):
     """frames_data: list of {"t", "ball": (x,y)|None, "players": {id: (x,y)}}.
 
@@ -247,26 +345,44 @@ def summarize(frames_data, teams, fps):
     possession_pct = {k: (poss_counts[k] / total * 100 if total else 0.0)
                       for k in ("A", "B")}
     shots = detect_shots(ball_traj, fps)
+    for s in shots:
+        s["xg"] = shot_xg(s["x"], s["y"])
     passes = detect_passes(frames_data, teams)
     distance = distance_covered(frames_data, teams)
     shape = average_shape(frames_data, teams)
     tackles = detect_tackles(frames_data, teams)
     out_of_play = detect_out_of_play(ball_traj)
     goals = detect_goals(ball_traj)
+    throw_ins = detect_throw_ins(frames_data, teams)
+    sequences = possession_sequences(frames_data, teams)
+    seq_stats = {}
+    for team in ("A", "B"):
+        tsegs = [q for q in sequences if q["team"] == team]
+        seq_stats[team] = {
+            "count": len(tsegs),
+            "longest_s": round(max([q["duration_s"] for q in tsegs] + [0]), 1),
+            "avg_s": round(sum(q["duration_s"] for q in tsegs) /
+                           len(tsegs), 1) if tsegs else 0.0,
+        }
     return {
         "possession_pct": possession_pct,
         "possession_frames": poss_frames,
         "heatmaps": heat,
         "shots": shots,
         "n_shots": len(shots),
+        "total_xg": {t: round(sum(s["xg"] for s in shots
+                                  if _shot_team(s, teams, frames_data) == t), 3)
+                     for t in ("A", "B")},
         "passes": passes,
         "distance_m": distance,
         "shape": shape,
         "tackles": tackles,
         "n_tackles": len(tackles),
         "out_of_play": out_of_play,
+        "throw_ins": throw_ins,
         "goals": goals,
         "n_goals": len(goals),
+        "sequences": seq_stats,
         "ball_coverage": ball_seen / len(frames_data) if frames_data else 0.0,
         "n_frames": len(frames_data),
     }

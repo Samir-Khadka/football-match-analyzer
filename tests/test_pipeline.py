@@ -247,6 +247,51 @@ class TestAdvancedEvents(unittest.TestCase):
         self.assertEqual(shape["centroids"]["B"], (11.0, 6.0))
 
 
+class TestV04(unittest.TestCase):
+    def test_xg_sane(self):
+        # penalty spot, central >> 30 m, wide; always a probability
+        pen = events.shot_xg(41.5, 0.0)
+        wild = events.shot_xg(22.5, -25.0)
+        self.assertGreater(pen, wild)
+        self.assertGreater(pen, 0.15)
+        for x, y in [(52, 0), (30, 10), (0, 0), (-40, -20)]:
+            v = events.shot_xg(x, y)
+            self.assertGreaterEqual(v, 0.0)
+            self.assertLessEqual(v, 1.0)
+
+    def test_throw_in_awarded_to_opponent(self):
+        teams = {1: "A", 2: "B"}
+        frames = [
+            {"t": 0.0, "ball": (0, 0), "players": {1: (0.2, 0), 2: (10, 0)}},
+            {"t": 0.5, "ball": (0, 20), "players": {1: (0.2, 20), 2: (10, 0)}},
+            # ball rolls over the sideline (|y| > 34)
+            {"t": 1.0, "ball": (0, 35), "players": {1: (0.2, 20), 2: (10, 0)}},
+        ]
+        ti = events.detect_throw_ins(frames, teams)
+        self.assertEqual(len(ti), 1)
+        self.assertEqual(ti[0]["team"], "B")  # A touched last -> B's throw
+
+    def test_byline_exit_is_not_a_throw(self):
+        teams = {1: "A", 2: "B"}
+        frames = [
+            {"t": 0.0, "ball": (40, 0), "players": {1: (40.2, 0)}},
+            {"t": 0.5, "ball": (53, 0), "players": {1: (40.2, 0)}},
+        ]
+        self.assertEqual(events.detect_throw_ins(frames, teams), [])
+
+    def test_possession_sequences(self):
+        teams = {1: "A", 2: "B"}
+        frames = [
+            {"t": 0.0, "ball": (0, 0), "players": {1: (0.2, 0), 2: (30, 0)}},
+            {"t": 1.0, "ball": (1, 0), "players": {1: (1.2, 0), 2: (30, 0)}},
+            {"t": 2.0, "ball": (29, 0), "players": {1: (1.2, 0), 2: (29.2, 0)}},
+            {"t": 3.0, "ball": (30, 0), "players": {1: (1.2, 0), 2: (30.2, 0)}},
+        ]
+        seqs = events.possession_sequences(frames, teams)
+        self.assertEqual([s["team"] for s in seqs], ["A", "B"])
+        self.assertAlmostEqual(seqs[0]["duration_s"], 1.0, places=1)
+
+
 class TestV03Events(unittest.TestCase):
     def _frames(self, seq):
         return [{"t": t, "ball": b, "players": p} for t, b, p in seq]

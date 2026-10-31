@@ -127,7 +127,11 @@ def build_report(summary, out_path, title="Match Report", clips=None):
     rows = "".join(
         f"<tr><td>{s['t']:.1f}s</td><td>{s['x']:.0f}m, {s['y']:.0f}m</td>"
         f"<td>{s['outcome'].replace('_', ' ')}</td>"
-        f"<td>{s['speed']:.0f} m/s</td></tr>" for s in shots)
+        f"<td>{s['speed']:.0f} m/s</td><td>{s.get('xg', 0):.2f}</td></tr>"
+        for s in shots)
+    txg = summary.get("total_xg", {"A": 0, "B": 0})
+    seq = summary.get("sequences", {})
+    throw_ins = summary.get("throw_ins", [])
     clip_html = ""
     if clips:
         items = "".join(
@@ -183,9 +187,20 @@ played further up the pitch.</p></div>
 <img src="data:image/png;base64,{hm_b}"></div>
 <div class="card"><h2>Shots — {len(shots)} ({len(goals)} goals)</h2>
 <img src="data:image/png;base64,{sm}">
-<table><tr><th>Time</th><th>From</th><th>Outcome</th><th>Speed</th></tr>
-{rows or '<tr><td colspan="4">No shots detected.</td></tr>'}</table></div>
+<p>xG — Team A {txg['A']:.2f} · Team B {txg['B']:.2f}
+<span class="note">(geometric heuristic, not a fitted model)</span></p>
+<table><tr><th>Time</th><th>From</th><th>Outcome</th><th>Speed</th><th>xG</th></tr>
+{rows or '<tr><td colspan="5">No shots detected.</td></tr>'}</table></div>
 {events_card}
+<div class="card"><h2>Possession sequences</h2>
+<table><tr><th></th><th>Sequences</th><th>Longest</th><th>Average</th></tr>
+<tr><td>Team A</td><td>{seq.get('A', {}).get('count', 0)}</td>
+<td>{seq.get('A', {}).get('longest_s', 0)}s</td>
+<td>{seq.get('A', {}).get('avg_s', 0)}s</td></tr>
+<tr><td>Team B</td><td>{seq.get('B', {}).get('count', 0)}</td>
+<td>{seq.get('B', {}).get('longest_s', 0)}s</td>
+<td>{seq.get('B', {}).get('avg_s', 0)}s</td></tr></table>
+<p class="note">Throw-ins: {len(throw_ins)}.</p></div>
 {clip_html}
 <p class="note">Coverage: ball tracked for {summary['ball_coverage']:.0%}
 of the match ({summary['n_frames']} frames analysed). Stats reflect what the
@@ -206,6 +221,8 @@ def build_pdf(summary, out_path, title="Match Report"):
     shots = summary["shots"]
     goals = summary.get("goals", [])
     tackles = summary.get("tackles", [])
+    txg = summary.get("total_xg", {"A": 0, "B": 0})
+    seq = summary.get("sequences", {})
 
     with PdfPages(out_path) as pdf:
         # page 1: key numbers
@@ -216,11 +233,16 @@ def build_pdf(summary, out_path, title="Match Report"):
             f"Possession — Team A {poss['A']:.0f}%   Team B {poss['B']:.0f}%",
             f"Shots — {len(shots)}   Goals — {len(goals)}   "
             f"Tackles — {len(tackles)}",
+            f"xG — Team A {txg['A']:.2f}   Team B {txg['B']:.2f}  (heuristic)",
             f"Completed passes — A {passes['completed']['A']}   "
             f"B {passes['completed']['B']}",
             f"Turnovers — A {passes['turnovers']['A']}   "
             f"B {passes['turnovers']['B']}",
             f"Distance — A {dist['A']:.0f} m   B {dist['B']:.0f} m",
+            f"Possession sequences — A {seq.get('A', {}).get('count', 0)} "
+            f"(longest {seq.get('A', {}).get('longest_s', 0)}s)   "
+            f"B {seq.get('B', {}).get('count', 0)} "
+            f"(longest {seq.get('B', {}).get('longest_s', 0)}s)",
             "",
             "Goals:",
         ]
@@ -230,7 +252,8 @@ def build_pdf(summary, out_path, title="Match Report"):
         lines += ["", "Shots:"]
         for s in shots:
             lines.append(f"  {s['t']:.0f}s — {s['outcome'].replace('_', ' ')}, "
-                         f"{s['speed']:.0f} m/s from {s['x']:.0f}m, {s['y']:.0f}m")
+                         f"{s['speed']:.0f} m/s from {s['x']:.0f}m, {s['y']:.0f}m, "
+                         f"xG {s.get('xg', 0):.2f}")
         lines += ["",
                   f"Coverage: ball tracked for {summary['ball_coverage']:.0%} "
                   f"of the match. Single-camera stats are approximate."]
