@@ -247,6 +247,43 @@ class TestAdvancedEvents(unittest.TestCase):
         self.assertEqual(shape["centroids"]["B"], (11.0, 6.0))
 
 
+class TestV13(unittest.TestCase):
+    def test_event_markers(self):
+        from matchanalyzer import annotate as am
+        summary = {
+            "shots": [{"t": 10.0}],
+            "goals": [{"t": 20.0}],
+            "tackles": [{"t": 15.0}],
+            "corners_goal_kicks": [{"t": 25.0, "type": "corner"}],
+        }
+        m = am._event_markers(summary)
+        self.assertEqual(m[10.0], ["SHOT"])
+        self.assertEqual(m[20.0], ["GOAL!"])
+        self.assertEqual(m[15.0], ["TACKLE"])
+        self.assertEqual(m[25.0], ["CORNER"])
+
+    def test_annotate_runs(self):
+        from matchanalyzer import annotate as am
+        import cv2, tempfile, os
+        # tiny 5-frame video
+        tmp = tempfile.mkdtemp()
+        src = os.path.join(tmp, "src.mp4")
+        out = os.path.join(tmp, "out.mp4")
+        vw = cv2.VideoWriter(src, cv2.VideoWriter_fourcc(*"mp4v"),
+                             10, (64, 64))
+        import numpy as np
+        for _ in range(5):
+            vw.write(np.zeros((64, 64, 3), dtype=np.uint8))
+        vw.release()
+        pf = [{"t": 0.0,
+               "players": [{"id": 1, "x1": 5, "y1": 5, "x2": 20, "y2": 20}],
+               "ball": {"cx": 30, "cy": 30}}]
+        am.annotate_video(src, out, pf, {1: "A"}, {"shots": [{"t": 0.0}]},
+                          fps=10.0)
+        self.assertTrue(os.path.exists(out))
+        self.assertGreater(os.path.getsize(out), 0)
+
+
 class TestV12(unittest.TestCase):
     def test_formation_442(self):
         from matchanalyzer import tactics as tm

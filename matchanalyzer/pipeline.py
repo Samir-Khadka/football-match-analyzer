@@ -27,9 +27,11 @@ class Pipeline:
         self.progress_cb = progress_cb
         self.tracker = Tracker(fps=int(fps))
 
-    def run(self, video_path, report_path="report.html", clips_dir=None):
+    def run(self, video_path, report_path="report.html", clips_dir=None,
+            annotate_path=None):
         from . import report as report_mod
         from . import clips as clips_mod
+        from . import annotate as annotate_mod
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             raise FileNotFoundError(f"cannot open video: {video_path}")
@@ -38,6 +40,7 @@ class Pipeline:
         tracks_by_id: dict[int, dict] = {}
         colors: dict[int, list] = {}
         ball_px: list = []
+        pixel_frames: list = []  # for annotated video export (v1.3)
         frame_idx = 0
         kept = 0
         ids_per_frame = []
@@ -64,6 +67,14 @@ class Pipeline:
                                           p["x2"], p["y2"])
                     colors.setdefault(p["id"], []).append(hsv)
             ball_px.append(ball)
+            # store pixels for annotation (v1.3)
+            pixel_frames.append({
+                "t": t,
+                "players": [{"id": p["id"], "x1": p["x1"], "y1": p["y1"],
+                             "x2": p["x2"], "y2": p["y2"]} for p in players],
+                "ball": {"cx": ball["cx"], "cy": ball["cy"]}
+                if ball else None,
+            })
             kept += 1
             frame_idx += 1
             if self.progress_cb and kept % 30 == 0:
@@ -116,4 +127,9 @@ class Pipeline:
                                          clips_dir)
             summary["clips"] = [c["name"] for c in clips]
         report_mod.build_report(summary, report_path, clips=clips)
+        if annotate_path is not None:
+            annotate_mod.annotate_video(
+                video_path, annotate_path, pixel_frames, teams, summary,
+                fps=self.fps, stride=self.stride)
+            summary["annotated_video"] = annotate_path
         return summary

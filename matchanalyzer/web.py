@@ -257,8 +257,9 @@ const jobId="{job_id}";
 const iv=setInterval(async()=>{
   const j=await (await fetch('/api/jobs/'+jobId)).json();
   if(j.status==='done'){clearInterval(iv);
-    document.body.innerHTML='<h1>Done!</h1><a href="/report/'+jobId+
-    '">View the full report</a>';}
+    document.body.innerHTML='<h1>Done!</h1><p><a href="/report/'+jobId+
+    '">View the full report</a></p><p><a href="/annotated/'+jobId+
+    '">Download annotated video</a> (boxes, ball trail, event callouts)</p>';}
   else if(j.status==='error'){clearInterval(iv);
     document.body.innerHTML='<h1>Error</h1><p>'+(j.error||'failed')+'</p>';}
   else{const p=Math.round((j.progress||0)*100);
@@ -289,6 +290,20 @@ def get_report(job_id: str):
     if not job or job["status"] != "done":
         return HTMLResponse("<p>Report not ready yet.</p>", status_code=404)
     return Path(job["report_path"]).read_text(encoding="utf-8")
+
+
+@app.get("/annotated/{job_id}")
+def get_annotated(job_id: str):
+    from fastapi.responses import FileResponse
+    with JOB_LOCK:
+        job = JOBS.get(job_id)
+    if not job or job["status"] != "done":
+        return JSONResponse({"status": "not ready"}, status_code=404)
+    path = UPLOAD_DIR / job_id / "annotated.mp4"
+    if not path.exists():
+        return JSONResponse({"status": "not found"}, status_code=404)
+    return FileResponse(str(path), media_type="video/mp4",
+                        filename="annotated.mp4")
 
 
 def _set_progress(job_id: str, p: float, status: str = "processing"):
@@ -332,7 +347,8 @@ def _process_job(job_id: str):
         summary = Pipeline(det, cal, fps=fps, progress_cb=progress).run(
             str(video_path),
             report_path=str(out_dir / "report.html"),
-            clips_dir=str(out_dir / "clips"))
+            clips_dir=str(out_dir / "clips"),
+            annotate_path=str(out_dir / "annotated.mp4"))
         _set_progress(job_id, 0.98)
 
         # report.html references clips relatively; serve from out_dir
