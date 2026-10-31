@@ -247,6 +247,40 @@ class TestAdvancedEvents(unittest.TestCase):
         self.assertEqual(shape["centroids"]["B"], (11.0, 6.0))
 
 
+class TestV15(unittest.TestCase):
+    def test_library_endpoints(self):
+        from fastapi.testclient import TestClient
+        from matchanalyzer import web as web_mod
+        import json, tempfile
+        from pathlib import Path
+        tmp = Path(tempfile.mkdtemp())
+        for jid in ("aaa111", "bbb222"):
+            d = tmp / jid
+            d.mkdir()
+            (d / "summary.json").write_text(json.dumps({
+                "n_shots": 5, "n_goals": 1,
+                "possession_pct": {"A": 60, "B": 40},
+                "total_xg": {"A": 1.2, "B": 0.5},
+                "passes": {"completed": {"A": 100, "B": 80}},
+                "n_tackles": 8,
+            }))
+        orig = web_mod.UPLOAD_DIR
+        web_mod.UPLOAD_DIR = tmp
+        try:
+            client = TestClient(web_mod.app)
+            r = client.get("/library")
+            self.assertEqual(r.status_code, 200)
+            r = client.get("/api/library")
+            self.assertEqual(len(r.json()["matches"]), 2)
+            r = client.get("/api/compare?a=aaa111&b=bbb222")
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.json()["a"]["stats"]["Shots"], 5)
+            r = client.get("/api/compare?a=aaa111&b=nope")
+            self.assertEqual(r.status_code, 404)
+        finally:
+            web_mod.UPLOAD_DIR = orig
+
+
 class TestV14(unittest.TestCase):
     def test_player_label_endpoints(self):
         from fastapi.testclient import TestClient

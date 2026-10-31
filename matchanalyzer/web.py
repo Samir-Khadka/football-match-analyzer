@@ -48,6 +48,7 @@ padding:.7rem 1.4rem;font-size:1rem;cursor:pointer}
 .note{color:#6b6b6b;font-size:.85rem}
 </style></head><body>
 <h1>⚽ Football Match Analyzer</h1>
+<p><a href="/library">📚 Match library</a></p>
 <div class="card">
 <p>Upload a single-camera match video (wide angle, pitch filling the frame).
 You'll get possession, shots + xG, tackles, passes, set pieces, heatmaps,
@@ -324,6 +325,117 @@ def players_page(job_id: str):
     if not job or job["status"] != "done":
         return HTMLResponse("<p>Analysis not done yet.</p>", status_code=404)
     return PLAYERS_HTML.replace("{job_id}", job_id)
+
+
+LIBRARY_HTML = """<!doctype html><html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Match library</title>
+<style>
+body{font-family:system-ui;max-width:720px;margin:2rem auto;padding:0 1rem;
+background:#faf6ed}h1{color:#4c1d95}
+.card{background:#fff;border:1px solid #e5dcc3;border-radius:12px;
+padding:1rem;margin:.8rem 0}
+.card a{color:#4c1d95;font-weight:600}
+.meta{color:#6b6b6b;font-size:.85rem}
+.compare{margin-top:2rem}
+button{background:#4c1d95;color:#fff;border:0;border-radius:8px;
+padding:.7rem 1.4rem;font-size:1rem;cursor:pointer}
+</style></head><body>
+<h1>📚 Match library</h1>
+<p><a href="/">← Analyze a new match</a></p>
+<div id="list"></div>
+<div class="compare">
+<h2>Compare two matches</h2>
+<p class="meta">Tick two matches, then compare.</p>
+<button onclick="compare()">Compare selected</button>
+<div id="cmp"></div>
+</div>
+<script>
+let matches=[];
+async function load(){
+  const j=await (await fetch('/api/library')).json();
+  matches=j.matches;
+  document.getElementById('list').innerHTML=matches.map(m=>
+    `<div class="card"><input type="checkbox" value="${m.job_id}"> `+
+    `<a href="/report/${m.job_id}">${m.title}</a><br>`+
+    `<span class="meta">${m.date} · Shots ${m.n_shots} · Goals ${m.n_goals} · `+
+    `Possession A ${m.poss_a}% / B ${m.poss_b}%</span></div>`).join('')||
+    '<p>No analyses yet.</p>';
+}
+async function compare(){
+  const sel=[...document.querySelectorAll('input:checked')].map(i=>i.value);
+  if(sel.length!==2){alert('Tick exactly two matches');return;}
+  const j=await (await fetch('/api/compare?a='+sel[0]+'&b='+sel[1])).json();
+  const rows=Object.keys(j.a.stats).map(k=>
+    `<tr><td>${k}</td><td>${j.a.stats[k]}</td><td>${j.b.stats[k]}</td></tr>`)
+    .join('');
+  document.getElementById('cmp').innerHTML=
+    `<table style="width:100%;background:#fff;border-radius:8px;margin-top:1rem">`+
+    `<tr><th></th><th>${j.a.title}</th><th>${j.b.title}</th></tr>${rows}</table>`;
+}
+load();
+</script></body></html>"""
+
+
+@app.get("/library", response_class=HTMLResponse)
+def library_page():
+    return LIBRARY_HTML
+
+
+@app.get("/api/library")
+def api_library():
+    import json as json_mod
+    import datetime
+    matches = []
+    for job_dir in sorted(UPLOAD_DIR.iterdir(), reverse=True):
+        summ_path = job_dir / "summary.json"
+        if not job_dir.is_dir() or not summ_path.exists():
+            continue
+        try:
+            summ = json_mod.loads(summ_path.read_text())
+        except Exception:
+            continue
+        # date from directory mtime
+        dt = datetime.datetime.fromtimestamp(
+            job_dir.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+        poss = summ.get("possession_pct", {})
+        matches.append({
+            "job_id": job_dir.name,
+            "title": f"Match {job_dir.name[:8]}",
+            "date": dt,
+            "n_shots": summ.get("n_shots", 0),
+            "n_goals": summ.get("n_goals", 0),
+            "poss_a": round(poss.get("A", 0)),
+            "poss_b": round(poss.get("B", 0)),
+        })
+    return {"matches": matches}
+
+
+@app.get("/api/compare")
+def api_compare(a: str, b: str):
+    import json as json_mod
+    def _stats(job_id):
+        p = UPLOAD_DIR / job_id / "summary.json"
+        if not p.exists():
+            return None
+        s = json_mod.loads(p.read_text())
+        poss = s.get("possession_pct", {})
+        return {
+            "Shots": s.get("n_shots", 0),
+            "Goals": s.get("n_goals", 0),
+            "Tackles": s.get("n_tackles", 0),
+            "Possession A %": round(poss.get("A", 0)),
+            "Possession B %": round(poss.get("B", 0)),
+            "xG A": s.get("total_xg", {}).get("A", 0),
+            "xG B": s.get("total_xg", {}).get("B", 0),
+            "Passes A": s.get("passes", {}).get("completed", {}).get("A", 0),
+            "Passes B": s.get("passes", {}).get("completed", {}).get("B", 0),
+        }
+    sa, sb = _stats(a), _stats(b)
+    if not sa or not sb:
+        return JSONResponse({"error": "not found"}, 404)
+    return {"a": {"title": f"Match {a[:8]}", "stats": sa},
+            "b": {"title": f"Match {b[:8]}", "stats": sb}}
 
 
 @app.get("/api/jobs/{job_id}/players")
