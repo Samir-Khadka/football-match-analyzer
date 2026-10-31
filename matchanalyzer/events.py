@@ -467,6 +467,45 @@ def progressive_passes(pass_list, attack_dirs):
     return out
 
 
+def player_stats(frames_data, teams, pass_list):
+    """Per-track stats: touches, distance, carries, passes made/received.
+    Note: track IDs can fragment on occlusions, so one real player may
+    appear as several rows — merge by checking the pass network map."""
+    stats = {}
+    prev_pos = {}
+    prev_pid = None
+    for f in frames_data:
+        pid = possession_per_frame(f["ball"], f["players"])
+        for tid, (px, py) in f["players"].items():
+            if tid not in teams:
+                continue
+            s = stats.setdefault(tid, {"team": teams[tid], "touches": 0,
+                                       "distance_m": 0.0, "carry_m": 0.0,
+                                       "passes_made": 0, "passes_received": 0,
+                                       "frames": 0})
+            s["frames"] += 1
+            if tid in prev_pos:
+                ox, oy = prev_pos[tid]
+                d = math.hypot(px - ox, py - oy)
+                s["distance_m"] += d
+                if pid == tid and prev_pid == tid:
+                    s["carry_m"] += d
+            prev_pos[tid] = (px, py)
+            if pid == tid:
+                s["touches"] += 1
+        prev_pid = pid if pid in teams else None
+    for p in pass_list:
+        if p["from"] in stats:
+            stats[p["from"]]["passes_made"] += 1
+        if p["to"] in stats:
+            stats[p["to"]]["passes_received"] += 1
+    # round for output
+    for s in stats.values():
+        s["distance_m"] = round(s["distance_m"], 1)
+        s["carry_m"] = round(s["carry_m"], 1)
+    return stats
+
+
 def summarize(frames_data, teams, fps):
     """frames_data: list of {"t", "ball": (x,y)|None, "players": {id: (x,y)}}.
 
@@ -543,6 +582,7 @@ def summarize(frames_data, teams, fps):
         "n_progressive": {t: sum(1 for p in prog if p["team"] == t)
                           for t in ("A", "B")},
         "carry_m": carries,
+        "players": player_stats(frames_data, teams, passes["list"]),
         "ball_coverage": ball_seen / len(frames_data) if frames_data else 0.0,
         "n_frames": len(frames_data),
     }

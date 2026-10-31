@@ -247,6 +247,31 @@ class TestAdvancedEvents(unittest.TestCase):
         self.assertEqual(shape["centroids"]["B"], (11.0, 6.0))
 
 
+class TestV10(unittest.TestCase):
+    def test_player_stats(self):
+        teams = {1: "A", 2: "A"}
+        frames = [
+            {"t": 0.0, "ball": (0, 0),
+             "players": {1: (0.0, 0.0), 2: (10.0, 0.0)}},
+            {"t": 1.0, "ball": (3, 4),
+             "players": {1: (3.0, 4.0), 2: (10.0, 0.0)}},
+            {"t": 2.0, "ball": (10, 0),
+             "players": {1: (3.0, 4.0), 2: (10.2, 0.0)}},
+        ]
+        plist = [{"t": 2.0, "from": 1, "to": 2, "team": "A", "dist_m": 8.0,
+                  "from_xy": (3.0, 4.0), "to_xy": (10.0, 0.0)}]
+        st = events.player_stats(frames, teams, plist)
+        self.assertEqual(st[1]["touches"], 2)  # possessed frames 0,1
+        self.assertEqual(st[2]["touches"], 1)  # possessed frame 2
+        self.assertAlmostEqual(st[1]["distance_m"], 5.0, places=1)
+        self.assertAlmostEqual(st[1]["carry_m"], 5.0, places=1)
+        self.assertEqual(st[1]["passes_made"], 1)
+        self.assertEqual(st[2]["passes_received"], 1)
+
+    def test_player_stats_empty(self):
+        self.assertEqual(events.player_stats([], {}, []), {})
+
+
 class TestV08Web(unittest.TestCase):
     def test_index_and_status(self):
         from fastapi.testclient import TestClient

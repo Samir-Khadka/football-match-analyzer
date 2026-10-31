@@ -191,6 +191,15 @@ def build_report(summary, out_path, title="Match Report", clips=None):
     n_gk = sum(1 for e in cgk if e["type"] == "goal_kick")
     n_prog = summary.get("n_progressive", {"A": 0, "B": 0})
     carries = summary.get("carry_m", {"A": 0, "B": 0})
+    players = summary.get("players", {})
+    # top 8 by touches for the table
+    top = sorted(players.items(), key=lambda kv: kv[1]["touches"],
+                 reverse=True)[:8]
+    prow = "".join(
+        f"<tr><td>#{tid}</td><td>{s['team']}</td><td>{s['touches']}</td>"
+        f"<td>{s['distance_m']:.0f} m</td><td>{s['carry_m']:.0f} m</td>"
+        f"<td>{s['passes_made']}</td><td>{s['passes_received']}</td></tr>"
+        for tid, s in top)
     clip_html = ""
     if clips:
         items = "".join(
@@ -226,6 +235,11 @@ border-bottom:1px solid #e8dfcc;text-align:left}}.note{{font-size:.8rem;
 color:#6b6156}}.stat{{display:inline-block;margin:0 18px 6px 0}}
 .stat b{{font-size:1.25rem}}</style></head><body>
 <h1>⚽ {title}</h1>
+<div class="card"><h2>Top performers</h2>
+<table><tr><th>Player</th><th>Team</th><th>Touches</th><th>Distance</th>
+<th>Carries</th><th>Passes</th><th>Received</th></tr>{prow}</table>
+<p class="note">Track IDs can split on occlusions — one real player may appear
+as several rows. Check the pass network map to merge.</p></div>
 <div class="card"><h2>Possession</h2><img src="data:image/png;base64,{pb}">
 <p>Team A {poss['A']:.0f}% · Team B {poss['B']:.0f}% ·
 based on {summary['possession_frames']} tracked frames.</p></div>
@@ -316,6 +330,16 @@ def build_pdf(summary, out_path, title="Match Report"):
             "",
             "Goals:",
         ]
+        players = summary.get("players", {})
+        if players:
+            lines += ["", "Top performers (touches):"]
+            top = sorted(players.items(),
+                         key=lambda kv: kv[1]["touches"], reverse=True)[:5]
+            for tid, s in top:
+                lines.append(
+                    f"  #{tid} ({s['team']}): {s['touches']} touches, "
+                    f"{s['distance_m']:.0f} m, {s['passes_made']} passes")
+            lines.append("")
         for g in goals:
             lines.append(f"  {g['t']:.0f}s — {g['x']:.0f}m, {g['y']:.0f}m "
                          f"({g['goal']} goal)")
