@@ -260,6 +260,23 @@ class TestV08Web(unittest.TestCase):
         r = client.get("/report/doesnotexist")
         self.assertEqual(r.status_code, 404)
 
+    def test_calibrate_pages(self):
+        from fastapi.testclient import TestClient
+        from matchanalyzer import web as web_mod
+        # fake a job awaiting calibration
+        web_mod.JOBS["testcal"] = {"status": "awaiting_calibration",
+                                   "frame_path": "/tmp/nonexistent.jpg"}
+        client = TestClient(web_mod.app)
+        r = client.get("/calibrate/testcal")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("pitch corners", r.text)
+        r = client.get("/progress/testcal")
+        self.assertEqual(r.status_code, 200)
+        # unknown job -> 404 on frame
+        r = client.get("/frame/nope")
+        self.assertEqual(r.status_code, 404)
+        del web_mod.JOBS["testcal"]
+
 
 class TestV07(unittest.TestCase):
     def test_carry_distance(self):
