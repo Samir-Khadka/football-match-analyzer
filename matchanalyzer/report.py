@@ -1,0 +1,132 @@
+"""Coach-facing report: heatmaps, possession %, shot map — one HTML page.
+
+Not a data dump: a single summary page a grassroots coach can read in a
+minute. Honest about coverage ("ball tracked for N% of match time").
+"""
+from __future__ import annotations
+
+import base64
+import io
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
+from .calibrate import PITCH_LENGTH, PITCH_WIDTH
+
+
+def _draw_pitch(ax):
+    L, W = PITCH_LENGTH, W_
+    ax.set_xlim(-L / 2 - 2, L / 2 + 2)
+    ax.set_ylim(-W / 2 - 2, W / 2 + 2)
+    ax.set_aspect("equal")
+    ax.axis("off")
+    c = "#3a7d44"
+    ax.add_patch(plt.Rectangle((-L / 2, -W / 2), L, W, fc="#4c9a52", ec="white"))
+    ax.plot([-L / 2, L / 2], [0, 0], color="white", lw=1)
+    ax.add_patch(plt.Circle((0, 0), 9.15, fc="none", ec="white"))
+    for gx in (-L / 2, L / 2):
+        s = 1 if gx < 0 else -1
+        ax.add_patch(plt.Rectangle((gx, -20.16), s * 16.5, 40.32,
+                                   fc="none", ec="white"))
+        ax.add_patch(plt.Rectangle((gx, -9.16), s * 5.5, 18.32,
+                                   fc="none", ec="white"))
+
+
+W_ = PITCH_WIDTH
+
+
+def _fig_to_b64(fig):
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=110)
+    plt.close(fig)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def heatmap_b64(points, title):
+    fig, ax = plt.subplots(figsize=(7, 4.4))
+    _draw_pitch(ax)
+    if points:
+        xs, ys = zip(*points)
+        ax.hist2d(xs, ys, bins=[21, 14],
+                  range=[[-PITCH_LENGTH / 2, PITCH_LENGTH / 2],
+                         [-PITCH_WIDTH / 2, PITCH_WIDTH / 2]],
+                  cmap="YlOrRd", alpha=0.85)
+    ax.set_title(title, fontsize=11)
+    return _fig_to_b64(fig)
+
+
+def shotmap_b64(shots):
+    fig, ax = plt.subplots(figsize=(7, 4.4))
+    _draw_pitch(ax)
+    style = {"goal": ("gold", "*", 220, "Goal"),
+             "on_target": ("deepskyblue", "o", 120, "On target"),
+             "off_target": ("lightgrey", "x", 90, "Off target")}
+    seen = set()
+    for s in shots:
+        col, mk, sz, lab = style[s["outcome"]]
+        ax.scatter([s["x"]], [s["y"]], c=col, marker=mk, s=sz,
+                   edgecolors="black", linewidths=0.7,
+                   label=lab if lab not in seen else None)
+        seen.add(lab)
+    if seen:
+        ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.02), ncol=3,
+                  fontsize=9)
+    ax.set_title(f"Shot map ({len(shots)} shots)", fontsize=11)
+    return _fig_to_b64(fig)
+
+
+def possession_b64(pct):
+    fig, ax = plt.subplots(figsize=(5, 1.6))
+    ax.barh(["Team A"], [pct["A"]], color="#d94f3d", height=0.45)
+    ax.barh(["Team B"], [pct["B"]], color="#3d6fd9", height=0.45,
+            left=[pct["A"]])
+    ax.set_xlim(0, 100)
+    ax.set_xlabel("Possession %")
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.set_yticks([])
+    return _fig_to_b64(fig)
+
+
+def build_report(summary, out_path, title="Match Report"):
+    poss = summary["possession_pct"]
+    shots = summary["shots"]
+    hm_a = heatmap_b64(summary["heatmaps"]["A"], "Team A — where they played")
+    hm_b = heatmap_b64(summary["heatmaps"]["B"], "Team B — where they played")
+    sm = shotmap_b64(shots)
+    pb = possession_b64(poss)
+    goals = sum(1 for s in shots if s["outcome"] == "goal")
+    rows = "".join(
+        f"<tr><td>{s['t']:.1f}s</td><td>{s['x']:.0f}m, {s['y']:.0f}m</td>"
+        f"<td>{s['outcome'].replace('_', ' ')}</td>"
+        f"<td>{s['speed']:.0f} m/s</td></tr>" for s in shots)
+    html = f"""<!doctype html><html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title}</title>
+<style>body{{font-family:system-ui,sans-serif;max-width:760px;margin:0 auto;
+padding:16px;background:#faf6ed;color:#2b2620}}h1{{font-size:1.3rem}}
+.card{{background:#fff;border:1px solid #e8dfcc;border-radius:12px;
+padding:14px;margin:12px 0}}img{{max-width:100%}}table{{width:100%;
+border-collapse:collapse;font-size:.85rem}}td,th{{padding:6px;
+border-bottom:1px solid #e8dfcc;text-align:left}}.note{{font-size:.8rem;
+color:#6b6156}}</style></head><body>
+<h1>⚽ {title}</h1>
+<div class="card"><h2>Possession</h2><img src="data:image/png;base64,{pb}">
+<p>Team A {poss['A']:.0f}% · Team B {poss['B']:.0f}% ·
+based on {summary['possession_frames']} tracked frames.</p></div>
+<div class="card"><h2>Heatmaps</h2>
+<img src="data:image/png;base64,{hm_a}">
+<img src="data:image/png;base64,{hm_b}"></div>
+<div class="card"><h2>Shots — {len(shots)} ({goals} goals)</h2>
+<img src="data:image/png;base64,{sm}">
+<table><tr><th>Time</th><th>From</th><th>Outcome</th><th>Speed</th></tr>
+{rows or '<tr><td colspan="4">No shots detected.</td></tr>'}</table></div>
+<p class="note">Coverage: ball tracked for {summary['ball_coverage']:.0%}
+of the match ({summary['n_frames']} frames analysed). Stats reflect what the
+single camera saw — treat them as approximate, not broadcast-grade.</p>
+</body></html>"""
+    Path(out_path).write_text(html, encoding="utf-8")
+    return str(out_path)

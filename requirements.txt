@@ -1,0 +1,7 @@
+--index-url https://download.pytorch.org/whl/cpu
+torch            # only needed for YoloDetector; CPU wheel
+ultralytics      # only needed for YoloDetector
+supervision==0.25.1   # ByteTrack (removed in later versions)
+opencv-python-headless
+matplotlib
+numpy
