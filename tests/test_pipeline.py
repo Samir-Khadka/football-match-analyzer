@@ -247,6 +247,58 @@ class TestAdvancedEvents(unittest.TestCase):
         self.assertEqual(shape["centroids"]["B"], (11.0, 6.0))
 
 
+class TestV11(unittest.TestCase):
+    def test_interception_flagged(self):
+        teams = {1: "A", 2: "B"}
+        # A passes (ball fast), B cuts it out
+        frames = [
+            {"t": 0.0, "ball": (0, 0), "players": {1: (0.1, 0), 2: (20, 0)}},
+            {"t": 0.2, "ball": (15, 0), "players": {1: (0.1, 0), 2: (15.1, 0)}},
+            {"t": 0.3, "ball": (15.2, 0), "players": {1: (0.1, 0), 2: (15.1, 0)}},
+        ]
+        # ball moved 15m in 0.2s = 75 m/s at the turnover -> interception
+        res = events.detect_passes(frames, teams)
+        self.assertEqual(res["turnovers"]["A"], 1)
+        self.assertEqual(len(res["turnover_list"]), 1)
+        self.assertTrue(res["turnover_list"][0]["interception"])
+        self.assertEqual(res["turnover_list"][0]["by_team"], "B")
+
+    def test_slow_turnover_not_interception(self):
+        teams = {1: "A", 2: "B"}
+        # slow dribble takeover, not a pass cut out
+        frames = [
+            {"t": 0.0, "ball": (0, 0), "players": {1: (0.1, 0), 2: (5, 0)}},
+            {"t": 1.0, "ball": (2, 0), "players": {1: (0.1, 0), 2: (2.1, 0)}},
+        ]
+        res = events.detect_passes(frames, teams)
+        if res["turnover_list"]:
+            self.assertFalse(res["turnover_list"][0]["interception"])
+
+    def test_cross_detection(self):
+        # A attacks +x; wide pass into the box
+        dirs = {"A": 1, "B": -1}
+        crosses = events.detect_crosses(
+            [{"t": 1.0, "from": 1, "to": 2, "team": "A", "dist_m": 20.0,
+              "from_xy": (20.0, 25.0), "to_xy": (40.0, 5.0)}], dirs)
+        self.assertEqual(len(crosses), 1)
+        # central pass is not a cross
+        flat = events.detect_crosses(
+            [{"t": 1.0, "from": 1, "to": 2, "team": "A", "dist_m": 20.0,
+              "from_xy": (20.0, 5.0), "to_xy": (40.0, 5.0)}], dirs)
+        self.assertEqual(len(flat), 0)
+
+    def test_ppda(self):
+        passes = {"completed": {"A": 20, "B": 10}, "turnovers": {},
+                  "list": []}
+        tackles = [{"team": "A"}, {"team": "A"}]  # A made 2 tackles
+        interceptions = [{"by_team": "A"}, {"by_team": "A"}]  # + 2 ints
+        # PPDA(A) = B passes (10) / A actions (4) = 2.5
+        out = events.ppda(passes, tackles, interceptions)
+        self.assertEqual(out["A"], 2.5)
+        # B did nothing -> None
+        self.assertIsNone(out["B"])
+
+
 class TestTactics(unittest.TestCase):
     def test_profile_and_vulns(self):
         from matchanalyzer import tactics as tm

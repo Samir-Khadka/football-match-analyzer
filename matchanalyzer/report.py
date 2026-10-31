@@ -269,7 +269,10 @@ based on {summary['possession_frames']} tracked frames.</p></div>
 completed, {passes['turnovers']['B']} turnovers.<br>
 Distance — Team A {dist['A']:.0f} m · Team B {dist['B']:.0f} m.<br>
 Carries (with ball) — A {carries['A']:.0f} m · B {carries['B']:.0f} m.<br>
-Progressive passes — A {n_prog['A']} · B {n_prog['B']}.</p></div>
+Progressive passes — A {n_prog['A']} · B {n_prog['B']}.<br>
+Crosses — A {summary.get('n_crosses', {}).get('A', 0)} · B {summary.get('n_crosses', {}).get('B', 0)}.<br>
+Interceptions — A {summary.get('n_interceptions', {}).get('A', 0)} · B {summary.get('n_interceptions', {}).get('B', 0)}.<br>
+PPDA (press intensity, lower = hotter) — A {summary.get('ppda', {}).get('A', '–')} · B {summary.get('ppda', {}).get('B', '–')}.</p></div>
 <div class="card"><h2>Team shape</h2><img src="data:image/png;base64,{sh}">
 <p class="note">Average positions across the match. Higher centroid = team
 played further up the pitch.</p></div>
@@ -339,6 +342,12 @@ def build_pdf(summary, out_path, title="Match Report"):
             f"B {summary.get('carry_m', {}).get('B', 0):.0f} m",
             f"Progressive passes — A {summary.get('n_progressive', {}).get('A', 0)}   "
             f"B {summary.get('n_progressive', {}).get('B', 0)}",
+            f"Crosses — A {summary.get('n_crosses', {}).get('A', 0)}   "
+            f"B {summary.get('n_crosses', {}).get('B', 0)}",
+            f"Interceptions — A {summary.get('n_interceptions', {}).get('A', 0)}   "
+            f"B {summary.get('n_interceptions', {}).get('B', 0)}",
+            f"PPDA — A {summary.get('ppda', {}).get('A', '–')}   "
+            f"B {summary.get('ppda', {}).get('B', '–')}",
             f"Possession sequences — A {seq.get('A', {}).get('count', 0)} "
             f"(longest {seq.get('A', {}).get('longest_s', 0)}s)   "
             f"B {seq.get('B', {}).get('count', 0)} "

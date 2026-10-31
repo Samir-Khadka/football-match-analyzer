@@ -506,6 +506,38 @@ def player_stats(frames_data, teams, pass_list):
     return stats
 
 
+def detect_crosses(pass_list, attack_dirs):
+    """Cross = pass from a wide position (|y| > 22) in the attacking half
+    to a more central position (|y| < 18) near the opponent goal."""
+    out = []
+    for p in pass_list:
+        d = attack_dirs.get(p["team"])
+        if not d or "from_xy" not in p:
+            continue
+        (x0, y0), (x1, y1) = p["from_xy"], p["to_xy"]
+        # must originate in attacking half, wide
+        if (x0 * d) < 0 or abs(y0) < 22:
+            continue
+        # must go toward the box: closer to goal line and more central
+        if (x1 * d) > (x0 * d) and abs(y1) < 18:
+            out.append(p)
+    return out
+
+
+def ppda(passes, tackles, interceptions):
+    """Passes Per Defensive Action — lower = more intense press.
+    PPDA(team) = opponent completed passes /
+                 (team tackles + team interceptions)."""
+    out = {}
+    for t in ("A", "B"):
+        opp = "B" if t == "A" else "A"
+        opp_passes = passes["completed"].get(opp, 0)
+        actions = len([x for x in tackles if x.get("team") == t]) + \
+            len([x for x in interceptions if x.get("by_team") == t])
+        out[t] = round(opp_passes / actions, 1) if actions else None
+    return out
+
+
 def summarize(frames_data, teams, fps):
     """frames_data: list of {"t", "ball": (x,y)|None, "players": {id: (x,y)}}.
 
@@ -547,7 +579,11 @@ def summarize(frames_data, teams, fps):
     network = pass_network(frames_data, teams, passes["list"])
     attack_dirs = attack_directions(shots, teams, frames_data, heat)
     prog = progressive_passes(passes["list"], attack_dirs)
+    crosses = detect_crosses(passes["list"], attack_dirs)
     carries = carry_distance(frames_data, teams)
+    interceptions = [t for t in passes["turnover_list"]
+                     if t["interception"]]
+    pressing = ppda(passes, tackles, interceptions)
     seq_stats = {}
     for team in ("A", "B"):
         tsegs = [q for q in sequences if q["team"] == team]
@@ -581,6 +617,14 @@ def summarize(frames_data, teams, fps):
         "progressive_passes": prog,
         "n_progressive": {t: sum(1 for p in prog if p["team"] == t)
                           for t in ("A", "B")},
+        "crosses": crosses,
+        "n_crosses": {t: sum(1 for p in crosses if p["team"] == t)
+                      for t in ("A", "B")},
+        "interceptions": interceptions,
+        "n_interceptions": {t: sum(1 for x in interceptions
+                                   if x["by_team"] == t)
+                            for t in ("A", "B")},
+        "ppda": pressing,
         "carry_m": carries,
         "players": player_stats(frames_data, teams, passes["list"]),
         "ball_coverage": ball_seen / len(frames_data) if frames_data else 0.0,
@@ -603,6 +647,7 @@ def detect_passes(frames_data, teams, max_gap_s: float = 3.0,
     passes = {"A": 0, "B": 0}
     turnovers = {"A": 0, "B": 0}
     pass_list = []
+    turnover_list = []
     last = None  # (pid, team, t, ball_xy)
     for f in frames_data:
         if _ball_out(f["ball"]):
@@ -620,6 +665,8 @@ def detect_passes(frames_data, teams, max_gap_s: float = 3.0,
             if pid != lpid and f["t"] - lt <= max_gap_s and f["ball"] and lball:
                 dist = math.hypot(f["ball"][0] - lball[0],
                                   f["ball"][1] - lball[1])
+                dt = max(f["t"] - lt, 1e-6)
+                speed = dist / dt
                 if dist >= min_dist_m:
                     if team == lteam:
                         passes[team] += 1
@@ -632,8 +679,18 @@ def detect_passes(frames_data, teams, max_gap_s: float = 3.0,
                                                     round(f["ball"][1], 1))})
                     else:
                         turnovers[lteam] += 1
+                        turnover_list.append({
+                            "t": f["t"], "by": pid, "by_team": team,
+                            "from_team": lteam,
+                            "ball_speed": round(speed, 1),
+                            "xy": (round(f["ball"][0], 1),
+                                   round(f["ball"][1], 1)),
+                            # interception = cut out a pass in flight
+                            "interception": speed >= 10.0,
+                        })
         last = (pid, team, f["t"], f["ball"])
-    return {"completed": passes, "turnovers": turnovers, "list": pass_list}
+    return {"completed": passes, "turnovers": turnovers, "list": pass_list,
+            "turnover_list": turnover_list}
 
 
 def distance_covered(frames_data, teams):
