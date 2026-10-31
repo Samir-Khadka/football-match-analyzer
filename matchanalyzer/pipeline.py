@@ -24,7 +24,7 @@ class Pipeline:
         self.stride = max(1, frame_stride)
         self.max_frames = max_frames
         self.collect_colors = collect_colors
-        self.tracker = Tracker()
+        self.tracker = Tracker(fps=int(fps))
 
     def run(self, video_path, report_path="report.html", clips_dir=None):
         from . import report as report_mod
@@ -66,10 +66,27 @@ class Pipeline:
             frame_idx += 1
         cap.release()
 
-        # team assignment from jersey colours
+        # team assignment from jersey colours — cluster only long-lived tracks
+        # (short fragments have noisy colours), then assign every track to
+        # the nearest centre
         mean_colors = {i: tuple(np.mean(v, axis=0)) for i, v in colors.items()
                        if v}
-        teams = events.assign_teams(tracks_by_id, mean_colors)
+        long_ids = [i for i in tracks_by_id
+                    if len(tracks_by_id[i]) >= 20 and i in mean_colors]
+        if len(long_ids) >= 2:
+            labels = events._kmeans_2d([mean_colors[i] for i in long_ids])
+            centres = []
+            for k in range(2):
+                pts = [mean_colors[i] for j, i in enumerate(long_ids)
+                       if labels[j] == k]
+                centres.append(np.mean(pts, axis=0))
+            teams = {}
+            for i, c in mean_colors.items():
+                d0 = np.linalg.norm(np.array(c) - centres[0])
+                d1 = np.linalg.norm(np.array(c) - centres[1])
+                teams[i] = "A" if d0 <= d1 else "B"
+        else:
+            teams = events.assign_teams(tracks_by_id, mean_colors)
 
         # to pitch coordinates
         frames_data = []

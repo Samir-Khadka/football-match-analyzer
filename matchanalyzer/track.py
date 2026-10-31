@@ -10,10 +10,18 @@ import math
 
 
 class Tracker:
-    def __init__(self):
+    def __init__(self, fps: int = 10):
         import supervision as sv
         self._sv = sv
-        self.byte_track = sv.ByteTrack()
+        # minimum_matching_threshold lowered from 0.8: fast dribbling
+        # (0.5-0.7 m/frame) drops consecutive-frame IoU below 0.8 and
+        # fragments tracks. frame_rate set to the real fps so
+        # max_time_lost scales correctly (10 frames = 1 s here).
+        self.byte_track = sv.ByteTrack(
+            track_activation_threshold=0.25,
+            lost_track_buffer=30,
+            minimum_matching_threshold=0.7,
+            frame_rate=fps)
 
     def update(self, detections):
         """detections: list of (x1, y1, x2, y2, cls, conf).

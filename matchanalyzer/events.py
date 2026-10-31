@@ -51,13 +51,22 @@ def assign_teams(tracks_by_id, sample_colors):
 
 
 def mean_hsv(frame_bgr, x1, y1, x2, y2):
+    """Mean HSV of the box CENTRE (torso) — the full box is mostly grass
+    for small/far players, which corrupts jersey-colour clustering."""
     import cv2
     h, w = frame_bgr.shape[:2]
     x1, y1 = max(0, int(x1)), max(0, int(y1))
     x2, y2 = min(w, int(x2)), min(h, int(y2))
     if x2 <= x1 or y2 <= y1:
         return (0.0, 0.0, 0.0)
-    crop = frame_bgr[y1:y2, x1:x2]
+    # centre 40% x 60% — jersey torso, not background
+    cx1 = int(x1 + (x2 - x1) * 0.3)
+    cx2 = int(x1 + (x2 - x1) * 0.7)
+    cy1 = int(y1 + (y2 - y1) * 0.2)
+    cy2 = int(y1 + (y2 - y1) * 0.8)
+    if cx2 <= cx1 or cy2 <= cy1:
+        return (0.0, 0.0, 0.0)
+    crop = frame_bgr[cy1:cy2, cx1:cx2]
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
     m = hsv.reshape(-1, 3).mean(0)
     return float(m[0]), float(m[1]), float(m[2])
@@ -90,6 +99,8 @@ def detect_shots(ball_traj, fps):
         if cur is None or nxt is None:
             continue
         t, x, y = cur
+        if _ball_out((x, y)):
+            continue  # already out of play — not a new shot
         dt = nxt[0] - t
         if dt <= 0:
             continue
@@ -133,6 +144,83 @@ def detect_shots(ball_traj, fps):
     return shots
 
 
+def detect_tackles(frames_data, teams, duel_radius_m: float = 2.0,
+                   max_gap_s: float = 3.0):
+    """A tackle = possession changes teams in a physical duel: at the
+    change, BOTH the previous carrier and the new possessor are within
+    duel_radius_m of the ball. A turnover where the ball travelled to a
+    distant player is an interception/pickup, not a tackle.
+    Returns [{"t", "tackler", "team", "x", "y"}]."""
+    tackles = []
+    last = None  # (pid, team, t)
+    for f in frames_data:
+        if _ball_out(f["ball"]):
+            last = None
+            continue
+        pid = possession_per_frame(f["ball"], f["players"])
+        if pid is None or pid not in teams or f["ball"] is None:
+            if last and f["t"] - last[2] > max_gap_s:
+                last = None
+            continue
+        team = teams[pid]
+        if last is not None:
+            lpid, lteam, lt = last
+            bx, by = f["ball"]
+            if pid != lpid and team != lteam and f["t"] - lt <= max_gap_s:
+                p_new = f["players"].get(pid)
+                p_old = f["players"].get(lpid)
+                if p_new and p_old:
+                    d_new = math.hypot(bx - p_new[0], by - p_new[1])
+                    d_old = math.hypot(bx - p_old[0], by - p_old[1])
+                    if d_new <= duel_radius_m and d_old <= duel_radius_m:
+                        tackles.append({"t": f["t"], "tackler": pid,
+                                        "team": team, "x": round(bx, 1),
+                                        "y": round(by, 1)})
+        last = (pid, team, f["t"])
+    return tackles
+
+
+def detect_out_of_play(ball_traj):
+    """Ball leaves the pitch rectangle. Returns [{"t", "x", "y"}]."""
+    events = []
+    was_in = None
+    for pt in ball_traj:
+        if pt is None:
+            continue
+        t, x, y = pt
+        inside = abs(x) <= PITCH_LENGTH / 2 and abs(y) <= PITCH_WIDTH / 2
+        if was_in and not inside:
+            events.append({"t": t, "x": round(x, 1), "y": round(y, 1)})
+        was_in = inside
+    return events
+
+
+def detect_goals(ball_traj):
+    """Any crossing of a goal line between the posts — including slow
+    rollers the shot detector (speed-gated) would miss."""
+    goals = []
+    prev = None
+    for pt in ball_traj:
+        if pt is None:
+            prev = None
+            continue
+        t, x, y = pt
+        if prev is not None:
+            pt0, px, py = prev
+            for goal_x in (PITCH_LENGTH / 2, -PITCH_LENGTH / 2):
+                # sign change (or exact touch) relative to the goal line;
+                # must be moving INTO the goal, not a clearance out
+                into_goal = (x - px) > 0 if goal_x > 0 else (x - px) < 0
+                touched = (px - goal_x) * (x - goal_x) <= 0 and x != px
+                if touched and into_goal and abs(y) <= GOAL_HALF_WIDTH_M:
+                    if not goals or t - goals[-1]["t"] > 3.0:
+                        goals.append({"t": t, "x": round(x, 1),
+                                      "y": round(y, 1),
+                                      "goal": "+x" if goal_x > 0 else "-x"})
+        prev = pt
+    return goals
+
+
 def summarize(frames_data, teams, fps):
     """frames_data: list of {"t", "ball": (x,y)|None, "players": {id: (x,y)}}.
 
@@ -162,6 +250,9 @@ def summarize(frames_data, teams, fps):
     passes = detect_passes(frames_data, teams)
     distance = distance_covered(frames_data, teams)
     shape = average_shape(frames_data, teams)
+    tackles = detect_tackles(frames_data, teams)
+    out_of_play = detect_out_of_play(ball_traj)
+    goals = detect_goals(ball_traj)
     return {
         "possession_pct": possession_pct,
         "possession_frames": poss_frames,
@@ -171,9 +262,21 @@ def summarize(frames_data, teams, fps):
         "passes": passes,
         "distance_m": distance,
         "shape": shape,
+        "tackles": tackles,
+        "n_tackles": len(tackles),
+        "out_of_play": out_of_play,
+        "goals": goals,
+        "n_goals": len(goals),
         "ball_coverage": ball_seen / len(frames_data) if frames_data else 0.0,
         "n_frames": len(frames_data),
     }
+
+
+def _ball_out(ball_xy):
+    """True when the ball has left the pitch (restarts break chains)."""
+    if ball_xy is None:
+        return False
+    return abs(ball_xy[0]) > PITCH_LENGTH / 2 or abs(ball_xy[1]) > PITCH_WIDTH / 2
 
 
 def detect_passes(frames_data, teams, max_gap_s: float = 3.0,
@@ -186,6 +289,9 @@ def detect_passes(frames_data, teams, max_gap_s: float = 3.0,
     pass_list = []
     last = None  # (pid, team, t, ball_xy)
     for f in frames_data:
+        if _ball_out(f["ball"]):
+            last = None  # restart breaks the chain (no phantom turnovers)
+            continue
         pid = possession_per_frame(f["ball"], f["players"])
         if pid is None or pid not in teams:
             # ball loose: keep last possessor until the gap expires
