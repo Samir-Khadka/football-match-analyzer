@@ -394,6 +394,40 @@ def _shot_team(shot, teams, frames_data, window_s: float = 1.0):
     return teams.get(nearest) if nearest else None
 
 
+def pass_network(frames_data, teams, pass_list):
+    """Nodes = track average positions (team, x, y, pass involvement);
+    edges = pass counts between tracks. For the pass-network map."""
+    pos_sum, pos_n = {}, {}
+    for f in frames_data:
+        for pid, (px, py) in f["players"].items():
+            if pid in teams:
+                s = pos_sum.get(pid, [0.0, 0.0])
+                s[0] += px
+                s[1] += py
+                pos_sum[pid] = s
+                pos_n[pid] = pos_n.get(pid, 0) + 1
+    nodes = []
+    for pid, (sx, sy) in pos_sum.items():
+        n = pos_n[pid]
+        nodes.append({"id": pid, "team": teams[pid],
+                      "x": round(sx / n, 1), "y": round(sy / n, 1),
+                      "frames": n})
+    edge_counts = {}
+    for p in pass_list:
+        key = (p["from"], p["to"])
+        edge_counts[key] = edge_counts.get(key, 0) + 1
+    edges = [{"from": a, "to": b, "count": c}
+             for (a, b), c in edge_counts.items()]
+    # involvement per node for sizing
+    inv = {}
+    for e in edges:
+        inv[e["from"]] = inv.get(e["from"], 0) + e["count"]
+        inv[e["to"]] = inv.get(e["to"], 0) + e["count"]
+    for nd in nodes:
+        nd["passes"] = inv.get(nd["id"], 0)
+    return {"nodes": nodes, "edges": edges}
+
+
 def summarize(frames_data, teams, fps):
     """frames_data: list of {"t", "ball": (x,y)|None, "players": {id: (x,y)}}.
 
@@ -422,6 +456,7 @@ def summarize(frames_data, teams, fps):
     shots = detect_shots(ball_traj, fps)
     for s in shots:
         s["xg"] = shot_xg(s["x"], s["y"])
+        s["team"] = _shot_team(s, teams, frames_data)
     passes = detect_passes(frames_data, teams)
     distance = distance_covered(frames_data, teams)
     shape = average_shape(frames_data, teams)
@@ -431,6 +466,7 @@ def summarize(frames_data, teams, fps):
     throw_ins = detect_throw_ins(frames_data, teams)
     corners_gk = detect_corners_goal_kicks(frames_data, teams, shots, heat)
     sequences = possession_sequences(frames_data, teams)
+    network = pass_network(frames_data, teams, passes["list"])
     seq_stats = {}
     for team in ("A", "B"):
         tsegs = [q for q in sequences if q["team"] == team]
@@ -447,7 +483,7 @@ def summarize(frames_data, teams, fps):
         "shots": shots,
         "n_shots": len(shots),
         "total_xg": {t: round(sum(s["xg"] for s in shots
-                                  if _shot_team(s, teams, frames_data) == t), 3)
+                                  if s.get("team") == t), 3)
                      for t in ("A", "B")},
         "passes": passes,
         "distance_m": distance,
@@ -460,6 +496,7 @@ def summarize(frames_data, teams, fps):
         "goals": goals,
         "n_goals": len(goals),
         "sequences": seq_stats,
+        "pass_network": network,
         "ball_coverage": ball_seen / len(frames_data) if frames_data else 0.0,
         "n_frames": len(frames_data),
     }

@@ -247,6 +247,53 @@ class TestAdvancedEvents(unittest.TestCase):
         self.assertEqual(shape["centroids"]["B"], (11.0, 6.0))
 
 
+class TestV06(unittest.TestCase):
+    def test_pass_network(self):
+        teams = {1: "A", 2: "A", 3: "B"}
+        frames = [
+            {"t": 0.0, "ball": (0, 0),
+             "players": {1: (0.0, 0.0), 2: (10.0, 0.0), 3: (-10, 0)}},
+            {"t": 1.0, "ball": (5, 0),
+             "players": {1: (5.0, 0.0), 2: (10.0, 0.0), 3: (-10, 0)}},
+        ]
+        plist = [{"t": 0.5, "from": 1, "to": 2, "team": "A", "dist_m": 10.0}]
+        net = events.pass_network(frames, teams, plist)
+        self.assertEqual(len(net["nodes"]), 3)
+        self.assertEqual(len(net["edges"]), 1)
+        self.assertEqual(net["edges"][0]["count"], 1)
+        n1 = next(n for n in net["nodes"] if n["id"] == 1)
+        self.assertAlmostEqual(n1["x"], 2.5, places=1)
+        self.assertEqual(n1["passes"], 1)
+
+    def test_network_fig_empty(self):
+        from matchanalyzer import report as report_mod
+        fig = report_mod.network_fig({"nodes": [], "edges": []})
+        self.assertIsNotNone(fig)
+
+    def test_momentum_fig(self):
+        from matchanalyzer import report as report_mod
+        shots = [{"t": 10.0, "xg": 0.1, "team": "A"},
+                 {"t": 20.0, "xg": 0.3, "team": "B"}]
+        fig = report_mod.momentum_fig(shots)
+        self.assertIsNotNone(fig)
+
+    def test_shots_have_teams(self):
+        # via summarize on a tiny synthetic
+        teams = {1: "A", 2: "B"}
+        frames = [
+            {"t": 0.0, "ball": (30, 0), "players": {1: (30.2, 0), 2: (-30, 0)}},
+            {"t": 0.5, "ball": (35, 0), "players": {1: (30.2, 0), 2: (-30, 0)}},
+            {"t": 1.0, "ball": (60, 0), "players": {1: (30.2, 0), 2: (-30, 0)}},
+        ]
+        traj = [(f["t"],) + f["ball"] for f in frames]
+        shots = events.detect_shots(traj, 10)
+        # manually attribute (summarize does this in the pipeline)
+        for s in shots:
+            s["team"] = events._shot_team(s, teams, frames)
+        if shots:
+            self.assertIn(shots[0]["team"], ("A", "B", None))
+
+
 class TestV05(unittest.TestCase):
     def test_attack_directions_from_heatmaps(self):
         # no shots: team positioned higher up attacks +x

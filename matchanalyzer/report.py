@@ -16,6 +16,8 @@ import numpy as np
 
 from .calibrate import PITCH_LENGTH, PITCH_WIDTH
 
+TEAM_COLORS = {"A": "#3b82f6", "B": "#ef4444"}
+
 
 def _draw_pitch(ax):
     L, W = PITCH_LENGTH, W_
@@ -111,6 +113,56 @@ def shape_fig(shape):
     return fig
 
 
+def network_fig(network):
+    """Pass network: nodes at average positions, sized by involvement;
+    edges = passes between players."""
+    fig, ax = plt.subplots(figsize=(7, 4.6))
+    _draw_pitch(ax)
+    if not network or not network.get("nodes"):
+        ax.set_title("Pass network — no completed passes")
+        fig.tight_layout()
+        return fig
+    nodes = {n["id"]: n for n in network["nodes"]}
+    for e in network["edges"]:
+        a, b = nodes.get(e["from"]), nodes.get(e["to"])
+        if not a or not b:
+            continue
+        ax.plot([a["x"], b["x"]], [a["y"], b["y"]], color="0.35",
+                lw=0.5 + e["count"], alpha=0.6, zorder=2)
+    for n in network["nodes"]:
+        col = TEAM_COLORS.get(n["team"], "gray")
+        sz = 60 + n["passes"] * 40
+        ax.scatter([n["x"]], [n["y"]], s=sz, c=[col], zorder=3,
+                   edgecolors="white", linewidths=1)
+    ax.set_title("Pass network (node size = involvement)")
+    fig.tight_layout()
+    return fig
+
+
+def momentum_fig(shots):
+    """Cumulative xG race chart — who was on top, when."""
+    fig, ax = plt.subplots(figsize=(7, 3.2))
+    # split by team via stored team if present, else all in one
+    for team, col in (("A", TEAM_COLORS["A"]), ("B", TEAM_COLORS["B"])):
+        ts = sorted((s["t"], s.get("xg", 0)) for s in shots
+                    if s.get("team") == team)
+        if not ts:
+            continue
+        xs, cum, run = [0], [0], 0.0
+        for t, xg in ts:
+            xs += [t, t]
+            cum += [run, run + xg]
+            run += xg
+        ax.step(xs, cum, where="post", label=f"Team {team}", color=col, lw=2)
+    ax.set_xlabel("Match time (s)")
+    ax.set_ylabel("Cumulative xG")
+    ax.set_title("Momentum — cumulative expected goals")
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    return fig
+
+
 def build_report(summary, out_path, title="Match Report", clips=None):
     poss = summary["possession_pct"]
     shots = summary["shots"]
@@ -124,6 +176,8 @@ def build_report(summary, out_path, title="Match Report", clips=None):
     sm = _fig_to_b64(shotmap_fig(shots))
     pb = _fig_to_b64(possession_fig(poss))
     sh = _fig_to_b64(shape_fig(summary["shape"])) if summary.get("shape") else ""
+    nw = _fig_to_b64(network_fig(summary.get("pass_network"))) if summary.get("pass_network") else ""
+    mo = _fig_to_b64(momentum_fig(shots))
     rows = "".join(
         f"<tr><td>{s['t']:.1f}s</td><td>{s['x']:.0f}m, {s['y']:.0f}m</td>"
         f"<td>{s['outcome'].replace('_', ' ')}</td>"
@@ -185,6 +239,10 @@ Distance — Team A {dist['A']:.0f} m · Team B {dist['B']:.0f} m.</p></div>
 <div class="card"><h2>Team shape</h2><img src="data:image/png;base64,{sh}">
 <p class="note">Average positions across the match. Higher centroid = team
 played further up the pitch.</p></div>
+<div class="card"><h2>Pass network</h2><img src="data:image/png;base64,{nw}">
+<p class="note">Nodes at average positions (size = pass involvement);
+lines = passes between players.</p></div>
+<div class="card"><h2>Momentum</h2><img src="data:image/png;base64,{mo}"></div>
 <div class="card"><h2>Heatmaps</h2>
 <img src="data:image/png;base64,{hm_a}">
 <img src="data:image/png;base64,{hm_b}"></div>
@@ -270,6 +328,8 @@ def build_pdf(summary, out_path, title="Match Report"):
                     heatmap_fig(summary["heatmaps"]["A"], "Team A heatmap"),
                     heatmap_fig(summary["heatmaps"]["B"], "Team B heatmap"),
                     shotmap_fig(shots),
+                    momentum_fig(shots),
+                    network_fig(summary.get("pass_network")),
                     shape_fig(summary["shape"])):
             pdf.savefig(fig)
             plt.close(fig)
