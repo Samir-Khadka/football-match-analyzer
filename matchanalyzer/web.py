@@ -259,7 +259,9 @@ const iv=setInterval(async()=>{
   if(j.status==='done'){clearInterval(iv);
     document.body.innerHTML='<h1>Done!</h1><p><a href="/report/'+jobId+
     '">View the full report</a></p><p><a href="/annotated/'+jobId+
-    '">Download annotated video</a> (boxes, ball trail, event callouts)</p>';}
+    '">Download annotated video</a> (boxes, ball trail, event callouts)</p>'+
+    '<p><a href="/players/'+jobId+'">Label players</a> '+
+    '(give tracks real names/numbers)</p>';}
   else if(j.status==='error'){clearInterval(iv);
     document.body.innerHTML='<h1>Error</h1><p>'+(j.error||'failed')+'</p>';}
   else{const p=Math.round((j.progress||0)*100);
@@ -285,11 +287,20 @@ def job_status(job_id: str):
 
 @app.get("/report/{job_id}", response_class=HTMLResponse)
 def get_report(job_id: str):
+    import json as json_mod
     with JOB_LOCK:
         job = JOBS.get(job_id)
     if not job or job["status"] != "done":
         return HTMLResponse("<p>Report not ready yet.</p>", status_code=404)
-    return Path(job["report_path"]).read_text(encoding="utf-8")
+    html = Path(job["report_path"]).read_text(encoding="utf-8")
+    # inject player labels (#id -> name)
+    labels_path = UPLOAD_DIR / job_id / "labels.json"
+    if labels_path.exists():
+        labels = json_mod.loads(labels_path.read_text())
+        for tid, name in labels.items():
+            html = html.replace(f"#{tid}<", f"{name}<")
+            html = html.replace(f"#{tid} ", f"{name} ")
+    return HTMLResponse(html)
 
 
 @app.get("/annotated/{job_id}")
@@ -304,6 +315,94 @@ def get_annotated(job_id: str):
         return JSONResponse({"status": "not found"}, status_code=404)
     return FileResponse(str(path), media_type="video/mp4",
                         filename="annotated.mp4")
+
+
+@app.get("/players/{job_id}", response_class=HTMLResponse)
+def players_page(job_id: str):
+    with JOB_LOCK:
+        job = JOBS.get(job_id)
+    if not job or job["status"] != "done":
+        return HTMLResponse("<p>Analysis not done yet.</p>", status_code=404)
+    return PLAYERS_HTML.replace("{job_id}", job_id)
+
+
+@app.get("/api/jobs/{job_id}/players")
+def get_players(job_id: str):
+    with JOB_LOCK:
+        job = JOBS.get(job_id)
+    if not job:
+        return JSONResponse({"status": "not_found"}, status_code=404)
+    # players from the summary
+    import json as json_mod
+    summary_path = UPLOAD_DIR / job_id / "summary.json"
+    labels_path = UPLOAD_DIR / job_id / "labels.json"
+    labels = {}
+    if labels_path.exists():
+        labels = json_mod.loads(labels_path.read_text())
+    players = []
+    if summary_path.exists():
+        summ = json_mod.loads(summary_path.read_text())
+        for tid, s in summ.get("players", {}).items():
+            players.append({
+                "id": tid, "team": s["team"], "touches": s["touches"],
+                "label": labels.get(str(tid), ""),
+            })
+    players.sort(key=lambda p: p["touches"], reverse=True)
+    return {"players": players}
+
+
+@app.post("/api/jobs/{job_id}/players")
+def set_players(job_id: str, payload: dict):
+    import json as json_mod
+    labels = {str(k): v for k, v in (payload.get("labels") or {}).items()}
+    labels_path = UPLOAD_DIR / job_id / "labels.json"
+    labels_path.write_text(json_mod.dumps(labels))
+    with JOB_LOCK:
+        if job_id in JOBS:
+            JOBS[job_id]["labels"] = labels
+    return {"ok": True}
+
+
+PLAYERS_HTML = """<!doctype html><html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Label players</title>
+<style>
+body{font-family:system-ui;max-width:560px;margin:2rem auto;padding:0 1rem;
+background:#faf6ed}h1{color:#4c1d95}
+table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;
+overflow:hidden}th,td{padding:.6rem;text-align:left;border-bottom:1px solid #eee}
+input{width:100%;padding:.4rem;border:1px solid #e5dcc3;border-radius:6px}
+button{background:#4c1d95;color:#fff;border:0;border-radius:8px;
+padding:.7rem 1.4rem;font-size:1rem;cursor:pointer;margin-top:1rem}
+.note{color:#6b6b6b;font-size:.85rem}
+</style></head><body>
+<h1>Label your players</h1>
+<p class="note">Match each track ID to a real name/number (e.g. "Ram #7").
+Reports and the annotated video will use these.</p>
+<table><tr><th>Track</th><th>Team</th><th>Touches</th><th>Name / number</th></tr>
+<tbody id="rows"></tbody></table>
+<button onclick="save()">Save labels</button>
+<p id="msg" class="note"></p>
+<script>
+const jobId="{job_id}";
+async function load(){
+  const j=await (await fetch('/api/jobs/'+jobId+'/players')).json();
+  document.getElementById('rows').innerHTML=j.players.map(p=>
+    `<tr><td>#${p.id}</td><td>${p.team}</td><td>${p.touches}</td>`+
+    `<td><input data-id="${p.id}" value="${p.label||''}" `+
+    `placeholder="e.g. Ram #7"></td></tr>`).join('');
+}
+async function save(){
+  const labels={};
+  document.querySelectorAll('input[data-id]').forEach(i=>{
+    if(i.value.trim())labels[i.dataset.id]=i.value.trim();});
+  await fetch('/api/jobs/'+jobId+'/players',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({labels})});
+  document.getElementById('msg').textContent='Saved! Reports now use these names.';
+}
+load();
+</script></body></html>"""
 
 
 def _set_progress(job_id: str, p: float, status: str = "processing"):
@@ -352,6 +451,18 @@ def _process_job(job_id: str):
         _set_progress(job_id, 0.98)
 
         # report.html references clips relatively; serve from out_dir
+        import json as json_mod
+        # save a JSON summary for the players API (strip non-serializable)
+        def _jsonable(o):
+            if isinstance(o, dict):
+                return {str(k): _jsonable(v) for k, v in o.items()}
+            if isinstance(o, (list, tuple)):
+                return [_jsonable(v) for v in o]
+            if isinstance(o, (str, int, float, bool)) or o is None:
+                return o
+            return str(o)
+        (out_dir / "summary.json").write_text(
+            json_mod.dumps(_jsonable(summary)))
         with JOB_LOCK:
             JOBS[job_id].update(status="done", progress=1.0,
                                 report_path=str(out_dir / "report.html"),

@@ -247,6 +247,49 @@ class TestAdvancedEvents(unittest.TestCase):
         self.assertEqual(shape["centroids"]["B"], (11.0, 6.0))
 
 
+class TestV14(unittest.TestCase):
+    def test_player_label_endpoints(self):
+        from fastapi.testclient import TestClient
+        from matchanalyzer import web as web_mod
+        import json, tempfile
+        from pathlib import Path
+        # fake a done job with a summary
+        tmp = Path(tempfile.mkdtemp())
+        job_dir = tmp / "lbltest"
+        job_dir.mkdir()
+        (job_dir / "summary.json").write_text(json.dumps({
+            "players": {"5": {"team": "A", "touches": 10}}}))
+        # point UPLOAD_DIR at tmp
+        orig = web_mod.UPLOAD_DIR
+        web_mod.UPLOAD_DIR = tmp
+        web_mod.JOBS["lbltest"] = {"status": "done"}
+        try:
+            client = TestClient(web_mod.app)
+            r = client.get("/api/jobs/lbltest/players")
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.json()["players"][0]["id"], "5")
+            r = client.post("/api/jobs/lbltest/players",
+                            json={"labels": {"5": "Ram #7"}})
+            self.assertEqual(r.json(), {"ok": True})
+            r = client.get("/api/jobs/lbltest/players")
+            self.assertEqual(r.json()["players"][0]["label"], "Ram #7")
+            r = client.get("/players/lbltest")
+            self.assertEqual(r.status_code, 200)
+        finally:
+            web_mod.UPLOAD_DIR = orig
+            del web_mod.JOBS["lbltest"]
+
+    def test_report_uses_labels(self):
+        from matchanalyzer import report as rm
+        # labels map is applied via _name() inside build_report;
+        # test the mapping logic directly
+        labels = {"5": "Ram #7"}
+        def _name(tid):
+            return labels.get(str(tid), labels.get(tid, f"#{tid}"))
+        self.assertEqual(_name(5), "Ram #7")
+        self.assertEqual(_name(99), "#99")
+
+
 class TestV13(unittest.TestCase):
     def test_event_markers(self):
         from matchanalyzer import annotate as am

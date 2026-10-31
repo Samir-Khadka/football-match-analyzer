@@ -163,7 +163,12 @@ def momentum_fig(shots):
     return fig
 
 
-def build_report(summary, out_path, title="Match Report", clips=None):
+def build_report(summary, out_path, title="Match Report", clips=None,
+                 labels=None):
+    """labels: {track_id: "Name #7"} — replaces #id in player tables."""
+    labels = labels or {}
+    def _name(tid):
+        return labels.get(str(tid), labels.get(tid, f"#{tid}"))
     poss = summary["possession_pct"]
     shots = summary["shots"]
     passes = summary.get("passes", {"completed": {"A": 0, "B": 0},
@@ -196,7 +201,7 @@ def build_report(summary, out_path, title="Match Report", clips=None):
     top = sorted(players.items(), key=lambda kv: kv[1]["touches"],
                  reverse=True)[:8]
     prow = "".join(
-        f"<tr><td>#{tid}</td><td>{s['team']}</td><td>{s['touches']}</td>"
+        f"<tr><td>{_name(tid)}</td><td>{s['team']}</td><td>{s['touches']}</td>"
         f"<td>{s['distance_m']:.0f} m</td><td>{s['carry_m']:.0f} m</td>"
         f"<td>{s['passes_made']}</td><td>{s['passes_received']}</td></tr>"
         for tid, s in top)
@@ -311,7 +316,8 @@ single camera saw — treat them as approximate, not broadcast-grade.</p>
     return str(out_path)
 
 
-def build_pdf(summary, out_path, title="Match Report"):
+def build_pdf(summary, out_path, title="Match Report", labels=None):
+    labels = labels or {}
     """PDF version of the report (spec: exportable as PDF) — same figures
     plus a text summary page, via matplotlib only (no extra deps)."""
     from matplotlib.backends.backend_pdf import PdfPages
@@ -363,8 +369,9 @@ def build_pdf(summary, out_path, title="Match Report"):
             top = sorted(players.items(),
                          key=lambda kv: kv[1]["touches"], reverse=True)[:5]
             for tid, s in top:
+                nm = labels.get(str(tid), f"#{tid}") if labels else f"#{tid}"
                 lines.append(
-                    f"  #{tid} ({s['team']}): {s['touches']} touches, "
+                    f"  {nm} ({s['team']}): {s['touches']} touches, "
                     f"{s['distance_m']:.0f} m, {s['passes_made']} passes")
             lines.append("")
         for g in goals:
