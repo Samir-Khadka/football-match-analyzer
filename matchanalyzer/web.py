@@ -54,6 +54,10 @@ You'll get possession, shots + xG, tackles, passes, set pieces, heatmaps,
 a pass network, momentum chart and highlight clips.</p>
 <input type="file" id="file" accept="video/*">
 <button onclick="upload()">Analyze match</button>
+<p style="margin:1rem 0">— or paste a link —</p>
+<input type="url" id="url" placeholder="YouTube / video URL / live stream link"
+ style="width:100%;padding:.6rem;border:1px solid #e5dcc3;border-radius:8px">
+<button onclick="uploadUrl()" style="margin-top:.5rem">Analyze from link</button>
 <div id="status"></div>
 <p class="note">CPU processing is slow (minutes for a short clip, hours for a
 full match). One job at a time. Your video is deleted after processing.</p>
@@ -68,6 +72,19 @@ async function upload(){
   const r=await fetch('/upload',{method:'POST',body:fd});
   const {job_id}=await r.json();
   location.href='/calibrate/'+job_id;
+}
+async function uploadUrl(){
+  const u=document.getElementById('url').value.trim();
+  if(!u){alert('Paste a video or stream link first');return;}
+  const st=document.getElementById('status');
+  st.textContent='Resolving link… (downloads can take a while)';
+  const r=await fetch('/from-url',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({url:u})});
+  const j=await r.json();
+  if(j.error){st.textContent='Error: '+j.error;return;}
+  if(j.kind==='stream'){location.href='/live/'+j.job_id;}
+  else{location.href='/calibrate/'+j.job_id;}
 }
 </script></body></html>"""
 
@@ -92,6 +109,36 @@ def upload_video(video: UploadFile = File(...)):
                         "frame_path": str(frame_path),
                         "frame_dims": dims}
     return {"job_id": job_id}
+
+
+@app.post("/from-url")
+def from_url(payload: dict):
+    from . import source as source_mod
+    url = (payload.get("url") or "").strip()
+    if not url or not source_mod.is_url(url):
+        return JSONResponse({"error": "not a valid http(s) URL"}, 400)
+    job_id = uuid.uuid4().hex[:8]
+    try:
+        kind, location = source_mod.resolve(url, UPLOAD_DIR / job_id)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)[:200]}, 400)
+    if kind == "stream":
+        with JOB_LOCK:
+            JOBS[job_id] = {"status": "live", "progress": 0.0,
+                            "stream_url": location,
+                            "live_stats": {"frames": 0}}
+        t = threading.Thread(target=_live_job, args=(job_id,), daemon=True)
+        t.start()
+        return {"job_id": job_id, "kind": "stream"}
+    # downloaded file -> normal calibrate flow
+    frame_path = UPLOAD_DIR / f"{job_id}_frame.jpg"
+    dims = _extract_first_frame(Path(location), frame_path)
+    with JOB_LOCK:
+        JOBS[job_id] = {"status": "awaiting_calibration", "progress": 0.0,
+                        "video_path": location,
+                        "frame_path": str(frame_path),
+                        "frame_dims": dims}
+    return {"job_id": job_id, "kind": "file"}
 
 
 def _extract_first_frame(video_path: Path, out_path: Path):
@@ -300,3 +347,127 @@ def _process_job(job_id: str):
             JOBS[job_id].update(status="error", error=str(e)[:300])
     finally:
         video_path.unlink(missing_ok=True)
+
+
+LIVE_HTML = """<!doctype html><html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live analysis</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:560px;margin:2rem auto;
+padding:0 1rem;background:#0f172a;color:#e2e8f0}
+h1{color:#f8fafc}.live{display:inline-block;background:#ef4444;color:#fff;
+border-radius:6px;padding:.2rem .6rem;font-size:.8rem;font-weight:700;
+animation:blink 1.2s infinite}
+@keyframes blink{50%{opacity:.4}}
+.card{background:#1e293b;border-radius:12px;padding:1.2rem;margin:1rem 0}
+.big{font-size:2rem;font-weight:700}
+.note{color:#94a3b8;font-size:.85rem}
+</style></head><body>
+<h1><span class="live">LIVE</span> Match analysis</h1>
+<div class="card"><div class="note">Frames sampled</div>
+<div class="big" id="frames">0</div></div>
+<div class="card"><div class="note">Possession</div>
+<div class="big" id="poss">–</div></div>
+<div class="card">Shots <b id="shots">0</b> · Goals <b id="goals">0</b> ·
+Tackles <b id="tackles">0</b></div>
+<p class="note">Sampling ~1 frame/sec on CPU (YOLO is heavy). For true
+real-time, run on a GPU. Stats update every 10 samples.</p>
+<script>
+const jobId="{job_id}";
+setInterval(async()=>{
+  const j=await (await fetch('/api/jobs/'+jobId)).json();
+  const s=j.live_stats||{};
+  document.getElementById('frames').textContent=s.frames||0;
+  const p=s.possession_pct;
+  document.getElementById('poss').textContent=p?
+    `A ${p.A.toFixed(0)}% – B ${p.B.toFixed(0)}%`:'–';
+  document.getElementById('shots').textContent=s.n_shots||0;
+  document.getElementById('goals').textContent=s.n_goals||0;
+  document.getElementById('tackles').textContent=s.n_tackles||0;
+},3000);
+</script></body></html>"""
+
+
+@app.get("/live/{job_id}", response_class=HTMLResponse)
+def live_page(job_id: str):
+    return LIVE_HTML.replace("{job_id}", job_id)
+
+
+def _live_job(job_id: str):
+    """Live stream processing: samples ~1 fps on CPU, updates running
+    stats every 10 samples. Honest limit: not true 25fps real-time."""
+    import cv2
+    import time
+    with JOB_LOCK:
+        stream_url = JOBS[job_id]["stream_url"]
+    cap = cv2.VideoCapture(stream_url)
+    if not cap.isOpened():
+        with JOB_LOCK:
+            JOBS[job_id].update(status="error",
+                                error="could not open stream")
+        return
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1280)
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 720)
+    cal = PitchCalibrator()
+    cal.set_from_corners((0, 0), (w, 0), (w, h), (0, h))
+    det = YoloDetector(str(MODEL_PATH) if MODEL_PATH.exists()
+                       else "yolov8n.pt")
+    from .track import Tracker
+    from . import events as events_mod
+    tracker = Tracker(fps=1)
+    frames_data, n = [], 0
+    last = time.time()
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            time.sleep(1)
+            continue
+        if time.time() - last < 1.0:
+            continue
+        last = time.time()
+        try:
+            dets = det.detect(frame)
+        except Exception:
+            continue
+        players, ball = tracker.update(dets)
+        pitch_players = {}
+        for p in players:
+            try:
+                pitch_players[p["id"]] = cal.px_to_pitch(float(p["cx"]),
+                                                         float(p["cy"]))
+            except Exception:
+                continue
+        bp = None
+        if ball is not None:
+            try:
+                bp = cal.px_to_pitch(float(ball["cx"]), float(ball["cy"]))
+            except Exception:
+                pass
+        frames_data.append({"t": float(n), "ball": bp,
+                            "players": pitch_players})
+        frames_data = frames_data[-300:]
+        n += 1
+        with JOB_LOCK:
+            JOBS[job_id]["live_stats"]["frames"] = n
+        if n % 10 == 0 and len(frames_data) >= 20:
+            try:
+                # live team split: no color data, so split by average x
+                # (Team A = left half on average). Crude but functional.
+                avg_x = {}
+                for f in frames_data:
+                    for pid, (px, py) in f["players"].items():
+                        s = avg_x.setdefault(pid, [0.0, 0])
+                        s[0] += px
+                        s[1] += 1
+                teams = {pid: ("A" if s[0] / s[1] < 0 else "B")
+                         for pid, s in avg_x.items()}
+                summ = events_mod.summarize(frames_data, teams, fps=1.0)
+                with JOB_LOCK:
+                    JOBS[job_id]["live_stats"].update({
+                        "possession_pct": summ.get("possession_pct"),
+                        "n_shots": summ.get("n_shots"),
+                        "n_goals": summ.get("n_goals"),
+                        "n_tackles": summ.get("n_tackles"),
+                    })
+            except Exception:
+                pass

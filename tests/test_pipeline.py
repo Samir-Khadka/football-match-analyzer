@@ -247,6 +247,51 @@ class TestAdvancedEvents(unittest.TestCase):
         self.assertEqual(shape["centroids"]["B"], (11.0, 6.0))
 
 
+class TestTactics(unittest.TestCase):
+    def test_profile_and_vulns(self):
+        from matchanalyzer import tactics as tm
+        summary = {
+            "shots": [
+                {"t": 10, "x": 30, "y": -20, "xg": 0.05, "team": "A",
+                 "goal": "+x"},
+                {"t": 20, "x": 32, "y": -18, "xg": 0.04, "team": "A",
+                 "goal": "+x"},
+                {"t": 30, "x": 28, "y": 5, "xg": 0.03, "team": "A",
+                 "goal": "+x"},
+            ],
+            "progressive_passes": [],
+            "shape": {"positions": {"A": [(-30, 0), (-20, -10), (-20, 10),
+                                          (-10, 0)],
+                                    "B": [(30, 0)]},
+                      "centroids": {}},
+            "players": {1: {"team": "A", "touches": 10, "distance_m": 50,
+                            "carry_m": 20, "passes_made": 8,
+                            "passes_received": 2},
+                        2: {"team": "A", "touches": 5, "distance_m": 40,
+                            "carry_m": 10, "passes_made": 2,
+                            "passes_received": 8}},
+            "passes": {"completed": {"A": 10, "B": 0},
+                       "turnovers": {"A": 0, "B": 0}, "list": []},
+        }
+        prof = tm.tactical_profile(summary)
+        # A attacks left flank (2 of 3 shots y<-11)
+        self.assertEqual(prof["A"]["dominant_flank"], "left")
+        # player 1 makes 80% of passes -> key man vulnerability
+        self.assertEqual(prof["A"]["key_distributor"], 1)
+        vulns = tm.find_vulnerabilities(prof)
+        types = [v["type"] for v in vulns if v["team"] == "A"]
+        self.assertIn("key_man", types)
+        # anti-game-plan mentions the key man
+        _, _, plan = tm.anti_game_plan(summary, vs_team="A")
+        self.assertTrue(any("#1" in p for p in plan))
+
+    def test_empty_summary(self):
+        from matchanalyzer import tactics as tm
+        prof = tm.tactical_profile({})
+        self.assertIn("A", prof)
+        self.assertEqual(tm.find_vulnerabilities(prof), [])
+
+
 class TestV10(unittest.TestCase):
     def test_player_stats(self):
         teams = {1: "A", 2: "A"}

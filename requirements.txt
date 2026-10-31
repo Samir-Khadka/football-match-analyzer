@@ -8,3 +8,4 @@ numpy
 fastapi          # web UI (v0.8)
 uvicorn          # web UI server
 python-multipart # web UI file uploads
+yt-dlp           # URL video/stream extraction (v1.0)

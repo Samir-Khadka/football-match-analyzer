@@ -200,6 +200,17 @@ def build_report(summary, out_path, title="Match Report", clips=None):
         f"<td>{s['distance_m']:.0f} m</td><td>{s['carry_m']:.0f} m</td>"
         f"<td>{s['passes_made']}</td><td>{s['passes_received']}</td></tr>"
         for tid, s in top)
+    # tactical analysis (v1.0)
+    from . import tactics as tactics_mod
+    tprof = tactics_mod.tactical_profile(summary)
+    tvulns = tactics_mod.find_vulnerabilities(tprof)
+    trows = "".join(
+        f"<tr><td>{v['severity'].upper()}</td><td>Team {v['team']}</td>"
+        f"<td>{v['finding']}<br><b>→ {v['exploit']}</b></td></tr>"
+        for v in tvulns)
+    _, _, plan_b = tactics_mod.anti_game_plan(summary, vs_team="B")
+    _, _, plan_a = tactics_mod.anti_game_plan(summary, vs_team="A")
+    plan_html = "".join(f"<li>{p}</li>" for p in plan_b)
     clip_html = ""
     if clips:
         items = "".join(
@@ -240,6 +251,11 @@ color:#6b6156}}.stat{{display:inline-block;margin:0 18px 6px 0}}
 <th>Carries</th><th>Passes</th><th>Received</th></tr>{prow}</table>
 <p class="note">Track IDs can split on occlusions — one real player may appear
 as several rows. Check the pass network map to merge.</p></div>
+<div class="card"><h2>⚔️ Tactical vulnerabilities</h2>
+<table><tr><th>Severity</th><th>Team</th><th>Finding → Exploit</th></tr>{trows}</table>
+<p class="note">Heuristic analysis from the tracked data — not a fitted model.
+Verify against video before basing a game plan on it.</p></div>
+<div class="card"><h2>📋 Anti-game-plan vs Team B</h2><ul>{plan_html}</ul></div>
 <div class="card"><h2>Possession</h2><img src="data:image/png;base64,{pb}">
 <p>Team A {poss['A']:.0f}% · Team B {poss['B']:.0f}% ·
 based on {summary['possession_frames']} tracked frames.</p></div>
