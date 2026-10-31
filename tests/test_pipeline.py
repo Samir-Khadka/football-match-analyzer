@@ -139,5 +139,111 @@ class TestYoloLoads(unittest.TestCase):
         self.assertTrue(True)  # model download happens on first use
 
 
+class TestRealFootage(unittest.TestCase):
+    """Detection on a REAL night-match photo (Wikimedia Commons,
+    tools/real_test.jpg — 8 visible players + ball). This is the spec's
+    build step 1: validate detection before trusting anything downstream."""
+
+    @classmethod
+    def setUpClass(cls):
+        import cv2
+        from matchanalyzer.detect import YoloDetector
+        cls.img = cv2.imread(str(ROOT / "tools" / "real_test.jpg"))
+
+    def test_coco_finds_players(self):
+        from matchanalyzer.detect import YoloDetector
+        dets = YoloDetector("models/yolov8n.pt", conf=0.35).detect(self.img)
+        players = [d for d in dets if d[4] == "player"]
+        # 8 visible; 6+ is a pass (occlusion is real)
+        self.assertGreaterEqual(len(players), 6,
+                                f"only {len(players)} players found")
+
+    def test_football_model_needs_low_threshold(self):
+        # documents the calibration finding: the fine-tuned model is
+        # under-confident out-of-domain; at conf=0.05 it sees the game
+        from matchanalyzer.detect import FootballDetector
+        det = FootballDetector("models/football-yolov8.pt", conf=0.05)
+        dets = det.detect(self.img)
+        players = [d for d in dets if d[4] == "player"]
+        balls = [d for d in dets if d[4] == "ball"]
+        self.assertGreaterEqual(len(players), 6)
+        self.assertGreaterEqual(len(balls), 1)
+
+
+class TestAdvancedEvents(unittest.TestCase):
+    def _frames(self, seq):
+        """seq: [(t, ball_xy|None, {pid: xy})]"""
+        return [{"t": t, "ball": b, "players": p} for t, b, p in seq]
+
+    def test_completed_pass(self):
+        teams = {1: "A", 2: "A", 3: "B"}
+        frames = self._frames([
+            (0.0, (0, 0), {1: (0.2, 0), 2: (10, 0), 3: (20, 0)}),
+            (0.5, (5, 0), {1: (4.8, 0), 2: (10, 0), 3: (20, 0)}),
+            (1.0, (9.8, 0), {1: (5, 0), 2: (10, 0), 3: (20, 0)}),
+        ])
+        res = events.detect_passes(frames, teams)
+        self.assertEqual(res["completed"]["A"], 1)
+        self.assertEqual(res["completed"]["B"], 0)
+        self.assertEqual(len(res["list"]), 1)
+        self.assertGreater(res["list"][0]["dist_m"], 2.0)
+
+    def test_turnover(self):
+        teams = {1: "A", 3: "B"}
+        frames = self._frames([
+            (0.0, (0, 0), {1: (0.2, 0), 3: (20, 0)}),
+            (1.0, (19.8, 0), {1: (0.2, 0), 3: (20, 0)}),
+        ])
+        res = events.detect_passes(frames, teams)
+        self.assertEqual(res["completed"]["A"], 0)
+        self.assertEqual(res["turnovers"]["A"], 1)
+
+    def test_too_short_is_not_a_pass(self):
+        teams = {1: "A", 2: "A"}
+        frames = self._frames([
+            (0.0, (0, 0), {1: (0.2, 0), 2: (1.0, 0)}),
+            (0.5, (0.9, 0), {1: (0.2, 0), 2: (1.0, 0)}),
+        ])
+        res = events.detect_passes(frames, teams)
+        self.assertEqual(res["completed"]["A"], 0)
+
+    def test_distance_covered(self):
+        teams = {1: "A"}
+        frames = self._frames([
+            (0.0, None, {1: (0, 0)}),
+            (1.0, None, {1: (3, 4)}),
+            (2.0, None, {1: (6, 8)}),
+        ])
+        d = events.distance_covered(frames, teams)
+        self.assertAlmostEqual(d["A"], 10.0, places=5)
+
+    def test_average_shape(self):
+        teams = {1: "A", 2: "B"}
+        frames = self._frames([
+            (0.0, None, {1: (-10, 0), 2: (10, 5)}),
+            (1.0, None, {1: (-12, 2), 2: (12, 7)}),
+        ])
+        shape = events.average_shape(frames, teams)
+        self.assertEqual(shape["positions"]["A"], [(-11.0, 1.0)])
+        self.assertEqual(shape["centroids"]["B"], (11.0, 6.0))
+
+
+class TestClips(unittest.TestCase):
+    def test_clips_cut_around_shots(self):
+        from matchanalyzer.clips import make_clips
+        out = OUT / "clips"
+        clips = make_clips(OUT / "synth" / "match.mp4",
+                           [{"t": 8.1, "outcome": "off_target"},
+                            {"t": 18.2, "outcome": "goal"}],
+                           out, pre_s=2.0, post_s=2.0)
+        self.assertEqual(len(clips), 2)
+        for c in clips:
+            self.assertTrue(c["path"].exists())
+            cap = __import__("cv2").VideoCapture(str(c["path"]))
+            n = int(cap.get(__import__("cv2").CAP_PROP_FRAME_COUNT))
+            cap.release()
+            self.assertGreater(n, 30)  # ~4 s at 10 fps
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

@@ -91,18 +91,49 @@ def possession_b64(pct):
     return _fig_to_b64(fig)
 
 
-def build_report(summary, out_path, title="Match Report"):
+def shape_b64(shape):
+    """Average positions per track — the team's shape."""
+    fig, ax = plt.subplots(figsize=(7, 4.4))
+    _draw_pitch(ax)
+    cols = {"A": "#d94f3d", "B": "#3d6fd9"}
+    for team in ("A", "B"):
+        pts = shape["positions"][team]
+        if pts:
+            xs, ys = zip(*pts)
+            ax.scatter(xs, ys, c=cols[team], s=130, edgecolors="white",
+                       linewidths=1.2, label=f"Team {team}", zorder=3)
+        cx, cy = shape["centroids"][team]
+        ax.scatter([cx], [cy], c=cols[team], s=320, marker="X",
+                   edgecolors="black", linewidths=1, zorder=4)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.02), ncol=2,
+              fontsize=9)
+    ax.set_title("Average shape (X = team centroid)", fontsize=11)
+    return _fig_to_b64(fig)
+
+
+def build_report(summary, out_path, title="Match Report", clips=None):
     poss = summary["possession_pct"]
     shots = summary["shots"]
+    passes = summary.get("passes", {"completed": {"A": 0, "B": 0},
+                                    "turnovers": {"A": 0, "B": 0}, "list": []})
+    dist = summary.get("distance_m", {"A": 0.0, "B": 0.0})
     hm_a = heatmap_b64(summary["heatmaps"]["A"], "Team A — where they played")
     hm_b = heatmap_b64(summary["heatmaps"]["B"], "Team B — where they played")
     sm = shotmap_b64(shots)
     pb = possession_b64(poss)
+    sh = shape_b64(summary["shape"]) if summary.get("shape") else ""
     goals = sum(1 for s in shots if s["outcome"] == "goal")
     rows = "".join(
         f"<tr><td>{s['t']:.1f}s</td><td>{s['x']:.0f}m, {s['y']:.0f}m</td>"
         f"<td>{s['outcome'].replace('_', ' ')}</td>"
         f"<td>{s['speed']:.0f} m/s</td></tr>" for s in shots)
+    clip_html = ""
+    if clips:
+        items = "".join(
+            f'<li><a href="{c["name"]}">{c["outcome"].replace("_", " ")} '
+            f'at {c["t"]:.0f}s</a></li>' for c in clips)
+        clip_html = (f'<div class="card"><h2>🎬 Highlight clips</h2>'
+                     f'<ul>{items}</ul></div>')
     html = f"""<!doctype html><html lang="en-GB"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title>
@@ -112,11 +143,24 @@ padding:16px;background:#faf6ed;color:#2b2620}}h1{{font-size:1.3rem}}
 padding:14px;margin:12px 0}}img{{max-width:100%}}table{{width:100%;
 border-collapse:collapse;font-size:.85rem}}td,th{{padding:6px;
 border-bottom:1px solid #e8dfcc;text-align:left}}.note{{font-size:.8rem;
-color:#6b6156}}</style></head><body>
+color:#6b6156}}.stat{{display:inline-block;margin:0 18px 6px 0}}
+.stat b{{font-size:1.25rem}}</style></head><body>
 <h1>⚽ {title}</h1>
 <div class="card"><h2>Possession</h2><img src="data:image/png;base64,{pb}">
 <p>Team A {poss['A']:.0f}% · Team B {poss['B']:.0f}% ·
 based on {summary['possession_frames']} tracked frames.</p></div>
+<div class="card"><h2>Key numbers</h2>
+<span class="stat"><b>{passes['completed']['A'] + passes['completed']['B']}</b><br>completed passes</span>
+<span class="stat"><b>{passes['turnovers']['A'] + passes['turnovers']['B']}</b><br>turnovers</span>
+<span class="stat"><b>{dist['A'] + dist['B']:.0f} m</b><br>distance covered</span>
+<span class="stat"><b>{len(shots)}</b><br>shots ({goals} goals)</span>
+<p class="note">Passes — Team A: {passes['completed']['A']} completed,
+{passes['turnovers']['A']} turnovers · Team B: {passes['completed']['B']}
+completed, {passes['turnovers']['B']} turnovers.<br>
+Distance — Team A {dist['A']:.0f} m · Team B {dist['B']:.0f} m.</p></div>
+<div class="card"><h2>Team shape</h2><img src="data:image/png;base64,{sh}">
+<p class="note">Average positions across the match. Higher centroid = team
+played further up the pitch.</p></div>
 <div class="card"><h2>Heatmaps</h2>
 <img src="data:image/png;base64,{hm_a}">
 <img src="data:image/png;base64,{hm_b}"></div>
@@ -124,6 +168,7 @@ based on {summary['possession_frames']} tracked frames.</p></div>
 <img src="data:image/png;base64,{sm}">
 <table><tr><th>Time</th><th>From</th><th>Outcome</th><th>Speed</th></tr>
 {rows or '<tr><td colspan="4">No shots detected.</td></tr>'}</table></div>
+{clip_html}
 <p class="note">Coverage: ball tracked for {summary['ball_coverage']:.0%}
 of the match ({summary['n_frames']} frames analysed). Stats reflect what the
 single camera saw — treat them as approximate, not broadcast-grade.</p>

@@ -136,7 +136,8 @@ def detect_shots(ball_traj, fps):
 def summarize(frames_data, teams, fps):
     """frames_data: list of {"t", "ball": (x,y)|None, "players": {id: (x,y)}}.
 
-    Returns possession %, per-team heatmap points, shots, coverage stats.
+    Returns possession %, per-team heatmap points, shots, passes, distance,
+    average shape, coverage stats.
     """
     poss_counts = defaultdict(int)
     poss_frames = 0
@@ -158,12 +159,90 @@ def summarize(frames_data, teams, fps):
     possession_pct = {k: (poss_counts[k] / total * 100 if total else 0.0)
                       for k in ("A", "B")}
     shots = detect_shots(ball_traj, fps)
+    passes = detect_passes(frames_data, teams)
+    distance = distance_covered(frames_data, teams)
+    shape = average_shape(frames_data, teams)
     return {
         "possession_pct": possession_pct,
         "possession_frames": poss_frames,
         "heatmaps": heat,
         "shots": shots,
         "n_shots": len(shots),
+        "passes": passes,
+        "distance_m": distance,
+        "shape": shape,
         "ball_coverage": ball_seen / len(frames_data) if frames_data else 0.0,
         "n_frames": len(frames_data),
     }
+
+
+def detect_passes(frames_data, teams, max_gap_s: float = 3.0,
+                  min_dist_m: float = 2.0):
+    """Completed pass = possession moves between teammates within max_gap_s
+    with the ball travelling > min_dist_m. Returns per-team counts plus a
+    pass list [{"t", "from", "to", "team", "dist_m"}] and turnovers."""
+    passes = {"A": 0, "B": 0}
+    turnovers = {"A": 0, "B": 0}
+    pass_list = []
+    last = None  # (pid, team, t, ball_xy)
+    for f in frames_data:
+        pid = possession_per_frame(f["ball"], f["players"])
+        if pid is None or pid not in teams:
+            # ball loose: keep last possessor until the gap expires
+            if last and f["t"] - last[2] > max_gap_s:
+                last = None
+            continue
+        team = teams[pid]
+        if last is not None:
+            lpid, lteam, lt, lball = last
+            if pid != lpid and f["t"] - lt <= max_gap_s and f["ball"] and lball:
+                dist = math.hypot(f["ball"][0] - lball[0],
+                                  f["ball"][1] - lball[1])
+                if dist >= min_dist_m:
+                    if team == lteam:
+                        passes[team] += 1
+                        pass_list.append({"t": f["t"], "from": lpid,
+                                          "to": pid, "team": team,
+                                          "dist_m": round(dist, 1)})
+                    else:
+                        turnovers[lteam] += 1
+        last = (pid, team, f["t"], f["ball"])
+    return {"completed": passes, "turnovers": turnovers, "list": pass_list}
+
+
+def distance_covered(frames_data, teams):
+    """Metres travelled per team, from pitch-coordinate trajectories."""
+    dist = {"A": 0.0, "B": 0.0}
+    prev = {}
+    for f in frames_data:
+        for pid, (px, py) in f["players"].items():
+            if pid not in teams:
+                continue
+            if pid in prev:
+                ox, oy = prev[pid]
+                dist[teams[pid]] += math.hypot(px - ox, py - oy)
+            prev[pid] = (px, py)
+    return {k: round(v, 1) for k, v in dist.items()}
+
+
+def average_shape(frames_data, teams):
+    """Mean position per track -> {"A": [(x, y)...], "B": [...]} plus each
+    team's centroid (tells a coach how high/low the block sat)."""
+    acc = defaultdict(lambda: [0.0, 0.0, 0])
+    for f in frames_data:
+        for pid, (px, py) in f["players"].items():
+            if pid in teams:
+                a = acc[(teams[pid], pid)]
+                a[0] += px
+                a[1] += py
+                a[2] += 1
+    shape = {"A": [], "B": []}
+    for (team, _pid), (sx, sy, n) in acc.items():
+        if n:
+            shape[team].append((round(sx / n, 1), round(sy / n, 1)))
+    centroids = {}
+    for team in ("A", "B"):
+        pts = shape[team]
+        centroids[team] = (round(sum(p[0] for p in pts) / len(pts), 1),
+                           round(sum(p[1] for p in pts) / len(pts), 1)) if pts else (0.0, 0.0)
+    return {"positions": shape, "centroids": centroids}

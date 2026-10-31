@@ -1,10 +1,37 @@
-# Football Match Analyzer — v0.1 pipeline skeleton
+# Football Match Analyzer — v0.2
 
 Single-camera, post-match football analysis for grassroots clubs: upload a
 match video, get player/ball tracking, possession %, heatmaps, shot map and a
 coach-readable report. No manual tagging.
 
-## What v0.1 actually is
+## What v0.2 adds
+
+- **Pass detection** — completed passes + turnovers from possession changes
+  between teammates (`detect_passes`).
+- **Distance covered** per team, from pitch-coordinate trajectories.
+- **Team shape** — average positions per track + team centroid ("how high
+  the block sat"), plotted on the report.
+- **Highlight clips** — mp4 cut ±4 s around every shot, linked in the
+  report's clip library (`matchanalyzer/clips.py`).
+- **Football-tuned detector** — `FootballDetector` wraps a YOLOv8 model
+  fine-tuned on football footage (ball/goalkeeper/player/referee classes,
+  mAP@0.5 0.785 on its validation set; `models/football-yolov8.pt`, ~22 MB
+  from HuggingFace).
+- **Real-footage detection tests** — `tools/real_test.jpg` (Wikimedia
+  Commons night match, 8 players + ball visible); the suite asserts
+  detection recall on it. This is the spec's build step 1, automated.
+
+## A real finding, kept honest
+
+Measuring the fine-tuned model on that night-match photo (2026-10-31):
+it is **under-confident out of its training domain** — it needed
+`conf=0.05` to find 7 players + the ball, while off-the-shelf COCO YOLOv8n
+found 7 players at `conf=0.35`. So the **default detector stays COCO**;
+use `FootballDetector` (default `conf=0.1`, tune per footage) when you
+need its ball/goalkeeper/referee classes. A quoted mAP does not survive
+contact with amateur night footage — validate per ground, per camera.
+
+## What v0.1 built
 
 A complete pipeline that runs end-to-end on CPU, validated against a
 synthetic match with known ground truth:
@@ -36,7 +63,13 @@ video -> YOLOv8 detect -> ByteTrack -> homography -> events -> HTML report
 ```bash
 pip install -r requirements.txt   # torch CPU recommended, no GPU needed
 python tools/make_synthetic_match.py tools/synth_out
-python -m unittest discover -s tests   # 15 tests, includes full end-to-end
+python -m unittest discover -s tests   # 22 tests: synthetic e2e + real photo
+```
+
+To use the football-tuned detector, download once (~22 MB):
+```bash
+curl -L -o models/football-yolov8.pt \
+  https://huggingface.co/uisikdag/yolo-v8-football-players-detection/resolve/main/best.pt
 ```
 
 ## Honest limits (read before trusting any number)

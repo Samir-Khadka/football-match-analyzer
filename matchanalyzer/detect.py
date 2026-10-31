@@ -43,6 +43,41 @@ class YoloDetector:
         return out
 
 
+class FootballDetector:
+    """Football-fine-tuned YOLOv8 (uisikdag/yolo-v8-football-players-detection,
+    mAP@0.5 0.785 on its own validation set).
+
+    Classes: ball / goalkeeper / player / referee. Goalkeepers and referees
+    are tracked as players (v0.2 simplification — documented in README).
+
+    Honest calibration note (measured 2026-10-31 on a real night-match
+    photo, tools/real_test.jpg): this model is UNDER-CONFIDENT out of its
+    training domain — it needed conf=0.05 to find 7 players + the ball,
+    while COCO yolov8n found 7 players at conf=0.35. Default conf=0.1 is a
+    starting point; tune per footage. Prefer YoloDetector unless you need
+    the ball/goalkeeper/referee classes.
+    model_path: local .pt (download once from HuggingFace, ~22 MB).
+    """
+
+    def __init__(self, model_path: str, conf: float = 0.1, imgsz: int = 960):
+        from ultralytics import YOLO
+        self.model = YOLO(model_path)
+        self.conf = conf
+        self.imgsz = imgsz  # higher res: players are small on wide shots
+
+    def detect(self, frame_bgr):
+        res = self.model.predict(frame_bgr, conf=self.conf,
+                                 imgsz=self.imgsz, verbose=False)[0]
+        names = self.model.names
+        out = []
+        for box in res.boxes:
+            label = names[int(box.cls[0])]
+            cls = "ball" if label == "ball" else "player"
+            x1, y1, x2, y2 = (float(v) for v in box.xyxy[0])
+            out.append((x1, y1, x2, y2, cls, float(box.conf[0])))
+        return out
+
+
 class GroundTruthDetector:
     """Replays per-frame ground truth boxes.
 

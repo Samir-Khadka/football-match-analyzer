@@ -26,8 +26,9 @@ class Pipeline:
         self.collect_colors = collect_colors
         self.tracker = Tracker()
 
-    def run(self, video_path, report_path="report.html"):
+    def run(self, video_path, report_path="report.html", clips_dir=None):
         from . import report as report_mod
+        from . import clips as clips_mod
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             raise FileNotFoundError(f"cannot open video: {video_path}")
@@ -87,5 +88,10 @@ class Pipeline:
         summary = events.summarize(frames_data, teams, self.fps / self.stride)
         summary["teams"] = teams
         summary["n_tracks"] = len(tracks_by_id)
-        report_mod.build_report(summary, report_path)
+        clips = None
+        if clips_dir is not None:
+            clips = clips_mod.make_clips(video_path, summary["shots"],
+                                         clips_dir)
+            summary["clips"] = [c["name"] for c in clips]
+        report_mod.build_report(summary, report_path, clips=clips)
         return summary
